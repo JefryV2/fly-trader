@@ -207,6 +207,28 @@ This writes source‑file SHA‑256 hashes, parameters and nnz alongside the mat
 | DAN  |  64 | Reward prediction |
 | MBON |  64 | Action valence → read‑out |
 
+### Read‑out: what the policy actually sees
+The spiking network is a **frozen** feature extractor; only the read‑out
+(`feature_encoder` → `actor`/`critic`) is trained. Two properties are essential
+and were both broken before:
+
+1. **Determinism.** `MaleCNS1024Simulator.encode` now resets the membrane
+   potential and *settles* the network for a fixed number of LIF steps per
+   observation, with membrane noise disabled. The feature vector is therefore a
+   pure function of the observation, which is what makes the replay buffer
+   valid: features computed at collection time are reproduced exactly at
+   training time.
+2. **Information.** The FlyWire‑derived MBON block on its own emits a nearly
+   constant (all‑zero) pattern, because the matrix's recurrent input has a
+   negative mean and the AL→KC→MBON cascade rarely reaches threshold. A compact
+   **16‑dim sensory channel** (5 multi‑horizon returns, realised volatility,
+   range position, plus the 8 current‑step indicators) is concatenated with the
+   64 MBON spike rates, so the read‑out input is a live, 80‑dim view of the
+   market. See `FlyBrainAgent.sensory_from_obs`.
+
+Training also caches these features in the replay buffer, so the spiking
+simulator is *never* re‑run during the actor‑critic update.
+
 ## Roadmap
 | Priority | Item |
 |----------|------|
@@ -217,7 +239,9 @@ This writes source‑file SHA‑256 hashes, parameters and nnz alongside the mat
 | P0 | ✅ Fixed/auditable connectome builder (`scripts/rebuild_connectome.py`) |
 | P1 | ✅ Split-aware training/eval + honest (median/held-out) API reporting |
 | P1 | ✅ Benchmark-relative (`excess`) objective so "beat buy & hold" is trained for |
+| P1 | ✅ Deterministic feature encoding + live sensory channel (policy can see the market) |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
+| P1 | Make the connectome block actually contribute (fix AL→KC→MBON cascade / signals) |
 | P1 | Wire real cell‑type anatomy instead of index ranges |
 | P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |
 | P2 | Select the best checkpoint by held-out, not in-sample, performance |
