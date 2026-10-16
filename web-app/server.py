@@ -122,6 +122,16 @@ SERVER_REWARD_MODE = os.environ.get("FLYBRAIN_REWARD_MODE", "excess")
 # Indicator normalisation must match whatever the served checkpoint was trained
 # with, or the observations mean something different to the network.
 SERVER_INDICATOR_NORM = os.environ.get("FLYBRAIN_INDICATOR_NORM", "per_feature")
+# Pre-specified risk overlay. When on, the served policy is not allowed to hold
+# new exposure while price is below its 200-day trend (and an open position is
+# closed). This converts an otherwise buy & hold-equivalent policy into
+# regime/tail timing, which beats buy & hold over a full cycle at the cost of
+# upside in a pure bull run (see README, "Does the fly beat buy & hold?").
+# Off by default so the raw learned policy can be evaluated honestly.
+SERVER_REGIME_GATE = os.environ.get("FLYBRAIN_REGIME_GATE", "false").lower() == "true"
+# Regime block layout appended to each observation by env._compute_regime_block:
+# [close/SMA200-1, close/SMA50-1, ann_vol20, vol20/vol60].
+REGIME_DIST200_IDX = -4
 
 env   = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=False,
                     reward_mode=SERVER_REWARD_MODE,
@@ -228,6 +238,27 @@ def _safe_float(val, default=0.0):
         return f if math.isfinite(f) else default
     except Exception:
         return default
+
+
+def _apply_regime_gate(probs, obs, shares):
+    """Risk overlay: force flat/exit while price is below its 200-day trend.
+
+    Must be applied *after* the mask preset, whose buy-floor would otherwise
+    re-introduce exposure. Mirrors ``strategy.regime_gate_prob_fn`` so live
+    serving matches the offline evaluation of the overlay.
+    """
+    if not SERVER_REGIME_GATE:
+        return probs
+    try:
+        dist200 = float(obs[REGIME_DIST200_IDX])
+    except Exception:
+        return probs
+    if dist200 >= 0.0:
+        return probs
+    p = np.zeros(7, dtype=np.float64)
+    p[6 if shares > 1e-6 else 0] = 1.0   # exit, or stay flat
+    return p.astype(probs.dtype)
+
 
 def _save_checkpoint():
     try:
@@ -426,6 +457,7 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
             shares=env.shares, cash=env.cash,
             price=price, entry_price=getattr(env, "entry_price", 0.0),
         ).astype(np.float32)
+        probs_arr = _apply_regime_gate(probs_arr, obs, env.shares)
         action_probs = probs_arr.tolist()
 
         # Dynamic action sampling: temperature-scaled policy sampling avoids static argmax lock
@@ -839,6 +871,7 @@ def eval_episode(payload: EvalEpisodePayload):
             shares=eval_env.shares, cash=eval_env.cash,
             entry_price=getattr(eval_env, "entry_price", 0.0),
         ).astype(np.float32)
+        p_arr = _apply_regime_gate(p_arr, cur_obs, eval_env.shares)
 
         if payload.deterministic:
             action = int(np.argmax(p_arr))

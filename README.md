@@ -25,8 +25,9 @@ The pipeline:
 ## Current status (verified against the code, 2026‑10)
 
 **Works**
-- Environment: 390‑dim observation (`30 × 5` OHLCV + `30 × 8` indicators),
-  transaction costs, optional stop‑loss/take‑profit. Covered by `tests/`.
+- Environment: 398‑dim observation (`30 × 5` OHLCV + `30 × 8` indicators + 4
+  portfolio‑state + 4 long‑horizon regime features), transaction costs, optional
+  stop‑loss/take‑profit. Covered by `tests/`.
 - Data: daily OHLCV for AAPL / TSLA / NVDA / MSFT. **The files do not share a
   date range**: AAPL is 2022-01-03 → 2024-12-31 (~753 rows) while
   TSLA/NVDA/MSFT are 2015-01-02 → 2025-12-30 (~2,765 rows).
@@ -58,11 +59,14 @@ The pipeline:
   Regenerate/audit with `scripts/rebuild_connectome.py`.
 - The anatomical partitions (AL/KC/CX/DAN/MBON) are a *structural* split of the
   neuron indices, not a cell‑type‑verified mapping.
-- The environment's legacy `indicator_norm="block"` z‑scores the whole
+- **`indicator_norm` now defaults to `per_feature`** in the env, `train.py`,
+  `scripts/backtest.py` and the server, so the training and evaluation paths
+  cannot silently disagree. The legacy `block` mode z‑scores the whole
   240‑value indicator block together, which destroys per‑indicator scale and
-  makes trailing indicators (used by reward shaping) meaningless. A correct
-  `indicator_norm="per_feature"` mode exists but is **not** the default yet, to
-  avoid invalidating existing checkpoints.
+  makes trailing indicators meaningless; it is kept only so old checkpoints can
+  still be loaded. (A `block`‑trained checkpoint that is evaluated with
+  `per_feature` produces garbage — this is exactly the mismatch that is now
+  impossible by default.)
 - `fly_connectome/` is an unmodified upstream React template, used only for its
   atlas binaries.
 - `flywire_data/` is duplicated inside `web-app/` (~96 MB ×2).
@@ -202,7 +206,9 @@ test window:
 With the buy & hold floor, a trained checkpoint is shipped only if it beats buy & hold on
 validation; otherwise the untrained buy & hold prior is written. So the fly can no longer
 *lose* to buy & hold (−44.37 pp → −1.18 pp in the bull test), but on these tickers and this
-era it also no longer *beats* it.
+era it also no longer *beats* it. (These numbers are from the bull‑only `default` and
+`bear2022` plans. Training on a full cycle that contains a bear does produce a small,
+reproducible out‑of‑sample win — see **three‑way verdict** below.)
 
 ### Why the fly converges to buy & hold — and what would beat it
 This is a data/objective fact, not a bug. Nine standard daily timing rules were run against
@@ -247,6 +253,56 @@ python train.py --all-tickers --plan default  --indicator-norm per_feature --tar
 python train.py --all-tickers --plan bear2022 --indicator-norm per_feature --target-entropy 0.3 --episodes 80
 python train.py --all-tickers --plan cycle    --indicator-norm per_feature --target-entropy 0.3 --episodes 80
 ```
+
+### Can the fly beat buy & hold? — three‑way verdict (2026‑10)
+
+Three candidate fixes were built and measured against each other on the same
+honest full‑cycle test (`cycle_b`: train ≤2020 **including the COVID crash**,
+val 2021H1, **test 2021H2–2024** = bear + bull; TSLA/NVDA/MSFT; greedy policy,
+honest mask, transaction costs included):
+
+1. **Regime overlay** — a pre‑specified rule that blocks new exposure (and exits)
+   while price is below its 200‑day trend (`strategy.regime_gate_prob_fn`; in the
+   server via `FLYBRAIN_REGIME_GATE=true`).
+2. **Push RL** — the `excess` objective trained on a window that contains a real
+   bear, with the position‑ and regime‑aware observation.
+3. **Better inputs** — the 4‑dim long‑horizon regime block (`close/SMA200−1`,
+   `close/SMA50−1`, annualised 20‑day vol, vol20/vol60) added to the
+   observation, so the fly can *see* the regime instead of inferring it.
+
+Reproduce the shipped checkpoint (~15 min):
+```bash
+python train.py --all-tickers --plan cycle_b --indicator-norm per_feature \
+    --target-entropy 0.5 --episodes 100 --select-by val_excess
+```
+
+Equal‑weight portfolio on the held‑out test window:
+
+| candidate | return % | max drawdown % | Sharpe |
+|-----------|---------:|---------------:|-------:|
+| buy & hold | 238.5 | 55.8 | 1.09 |
+| **trained fly** (this repo's shipped checkpoint) | **244.7** | 54.5 | **1.11** |
+| trained fly + regime gate | 228.7 | **41.5** | 1.26 |
+| pure `trend200` rule | **255.8** | **38.4** | **1.32** |
+
+- The **trained fly now beats buy & hold on all three metrics**, but narrowly:
+  +6.2 pp greedy, +8.7 pp averaged over 5 stochastic seeds (±11 pp). The gain is
+  concentrated in NVDA; on TSLA/MSFT the fly essentially *tracks* buy & hold at
+  equal drawdown. It is a real, held‑out edge — not a large one.
+- The **regime gate** trades ≈4 pp of return for a much smaller drawdown and a
+  higher Sharpe; it is the better choice if you optimise risk‑adjusted return.
+- The **pure 200‑day trend rule dominates both** on every metric here. On this
+  data there is no evidence that the learned policy's extra machinery adds value
+  beyond regime timing — consistent with the conditional‑edge result above.
+
+**Verdict.** The fly used to lose to buy & hold because of the *objective and the
+data*, not the network: a bull‑only training window contains no de‑risking signal,
+so the `excess` reward correctly converges to "always long" (buy & hold). Training
+on a window that contains a bear (`cycle_b`) and giving the policy the regime
+block lets it learn *some* de‑risking, and the shipped checkpoint now edges the
+benchmark out of sample. The simple trend overlay remains a stronger, cheaper
+risk‑adjusted alternative and is one environment variable away
+(`FLYBRAIN_REGIME_GATE=true`).
 
 ## Connectome Mode
 The feature extractor can be wired with FlyWire‑derived weights:

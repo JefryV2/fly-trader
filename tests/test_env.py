@@ -140,3 +140,39 @@ def test_dd_penalty_punishes_deepening_drawdown_but_not_cash():
     s_plain, _ = _run(cash_plain, [0] * cash_plain.n_steps)
     s_pen, _ = _run(cash_pen, [0] * cash_pen.n_steps)
     assert s_pen == pytest.approx(s_plain)
+
+
+# ── long-horizon regime block (trend / volatility context) ─────────────────
+MSFT = DATA_DIR / "MSFT_daily.csv"
+
+
+def test_regime_block_defined_from_first_bar_of_slice():
+    """A test slice starting mid-history must still have a 200-day trend."""
+    env = FlyTradeEnv(MSFT, window_size=30,
+                      start_date="2022-01-03", end_date="2022-12-31")
+    obs, _ = env.reset()
+    assert env.observation_space.shape == (OBS_DIM,)
+    assert obs.shape == (OBS_DIM,)
+    regime = obs[-4:]
+    assert np.isfinite(regime).all()
+    # close/SMA200 - 1 is defined because MSFT has history before the slice.
+    assert regime[0] != 0.0
+    assert regime[2] > 0.0   # realised volatility is positive
+
+
+def test_regime_gate_blocks_exposure_below_trend():
+    from config import OBS_DIM
+    from strategy import regime_gate_prob_fn
+
+    def inner_always_buy(_obs, _prev, _shares, _cash):
+        return np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+
+    gate = regime_gate_prob_fn(inner_always_buy)
+    obs = np.zeros(OBS_DIM)
+    obs[-4] = -0.10          # below the 200-day trend -> risk-off
+    p_flat = gate(obs, 0, 0.0, 1e5)
+    assert p_flat[0] == 1.0 and p_flat[3] == 0.0
+    p_long = gate(obs, 3, 10.0, 0.0)
+    assert p_long[6] == 1.0   # exit
+    obs[-4] = 0.10           # above the trend -> pass through
+    assert gate(obs, 0, 0.0, 1e5)[3] == 1.0

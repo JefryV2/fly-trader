@@ -170,7 +170,10 @@ def main():
                    help="disable the anti-stall buy-margin penalty (default: disabled)")
     p.add_argument("--buy-margin", dest="buy_margin", action="store_true",
                    help="re-enable the legacy anti-stall buy-margin penalty")
-    p.add_argument("--indicator-norm", choices=["block", "per_feature"], default="block")
+    p.add_argument("--indicator-norm", choices=["block", "per_feature"], default="per_feature",
+                   help="indicator scaling; must match the eval/serving path. "
+                        "Default per_feature (the shipped checkpoints use it). "
+                        "'block' is legacy for old checkpoints.")
     p.add_argument("--sl-tp", action="store_true")
     p.add_argument("--max-steps", type=int, default=0,
                    help="cap steps per training episode (0 = full split); speeds up experiments")

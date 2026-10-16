@@ -36,7 +36,7 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block", reward_mode: str = "shaped", dd_penalty: float = 0.0):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "per_feature", reward_mode: str = "shaped", dd_penalty: float = 0.0):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
