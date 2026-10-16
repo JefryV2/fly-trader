@@ -161,6 +161,9 @@ def main():
                         "penalising the agent's own drawdown has a trivial optimum "
                         "(never invest) and collapses to all-cash in practice; it is "
                         "kept only as a documented negative result. Leave at 0.")
+    p.add_argument("--no-guard", dest="guard", action="store_false", default=True,
+                   help="do NOT require the checkpoint to beat buy & hold on "
+                        "validation before shipping (for experiments only)")
     p.add_argument("--val-seeds", type=int, default=3,
                    help="seeds averaged for stochastic validation model selection")
     p.add_argument("--no-buy-margin", dest="buy_margin", action="store_false", default=False,
@@ -212,7 +215,9 @@ def main():
     # checkpoint that beats that. For the excess objective the threshold is
     # exactly 0 (0 == matching the benchmark).
     baseline = evaluate_split(agent, tickers, "val", args, deterministic=True, n_seeds=1)
-    if args.select_by == "val_excess":
+    if not args.guard:
+        guard = -1e9
+    elif args.select_by == "val_excess":
         guard = 0.0
     elif args.select_by == "val_sharpe":
         guard = baseline["mean_sharpe"]

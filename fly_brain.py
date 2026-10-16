@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 from scipy.sparse import csr_matrix
 
-from config import CUR_INDICATOR_SLICE, OBS_DIM
+from config import CUR_INDICATOR_SLICE, OBS_DIM, PORTFOLIO_SLICE, REGIME_SLICE
 
 # ── FlyWire Connectome Data Loader ──────────────────────────────────────────
 
@@ -555,7 +555,7 @@ class FlyBrainAgent(nn.Module):
         weight_cache: Path to cached weight pickle file
         N_NEURONS: Total neurons (default 1024). If >1024, uses more connectome data.
     """
-    SENSORY_DIM = 20  # dims of the compact observation summary (see sensory_from_obs)
+    SENSORY_DIM = 24  # dims of the compact observation summary (see sensory_from_obs)
 
     def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
         super().__init__()
@@ -648,15 +648,16 @@ class FlyBrainAgent(nn.Module):
         """Compact, live summary of one observation (a pure function of obs).
 
         5 multi-horizon returns + realised volatility (2) + range position (1)
-        + the 8 current-step indicators + the 4 portfolio-state values = 20 dims.
-        These are already normalised by the environment, so we only apply
-        bounded clipping.
+        + the 8 current-step indicators + the 4 portfolio-state values + the 4
+        long-horizon regime values = 24 dims. These are already normalised by the
+        environment, so we only apply bounded clipping.
         """
         o = np.asarray(obs, dtype=np.float64).reshape(-1)
         n = o.size
         close = o[3:min(n, 150):5]                  # the 30 window closes
         cur_ind = o[CUR_INDICATOR_SLICE]
-        port = o[CUR_INDICATOR_SLICE.stop:]         # portfolio-state block
+        port = o[PORTFOLIO_SLICE]
+        regime = o[REGIME_SLICE]
         feats = []
         if close.size >= 21:
             c = float(close[-1])
@@ -677,6 +678,10 @@ class FlyBrainAgent(nn.Module):
             feats.extend(list(np.clip(port[:4], -1.0, 1.0)))
         else:
             feats.extend([0.0, 1.0, 0.0, 1.0])
+        if regime.size >= 4:
+            feats.extend(list(np.clip(regime[:4], -3.0, 3.0)))
+        else:
+            feats.extend([0.0] * 4)
         return np.asarray(feats, dtype=np.float32)
 
     def encode_obs(self, obs):

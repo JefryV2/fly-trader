@@ -72,7 +72,7 @@ def test_compare_on_env_runs_all_baselines():
                            start_date="2024-01-01", end_date="2024-06-30")
 
     res = compare_on_env(factory, None, include_legacy=False)
-    assert set(res.keys()) == {"buy_hold", "momentum", "random"}
+    assert set(res.keys()) == {"buy_hold", "momentum", "trend200", "random"}
     for m in res.values():
         assert "total_return_pct" in m
         assert "sharpe" in m

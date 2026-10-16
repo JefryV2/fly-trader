@@ -38,12 +38,19 @@ MARKET_OBS_DIM = N_OHLCV_FEATURES + N_INDICATOR_FEATURES  # 390
 # which is why it could never commit to a full position.
 #   [exposure_frac, cash_frac, unrealised_pnl_frac, steps_since_trade/30]
 PORTFOLIO_OBS_DIM = 4
-OBS_DIM = MARKET_OBS_DIM + PORTFOLIO_OBS_DIM  # 394
-# Explicit slice of the *current-step* indicator vector inside the observation
-# (row 29 of the 30x8 indicator window). The spiking encoder and the sensory
-# summary must use this rather than [-8:], because the portfolio block now
-# occupies the tail of the observation.
+# Regime block: long-horizon context the policy needs to *identify the regime*
+# (trend and volatility). Where the fly's only reachable edge lives — the
+# documented trend / volatility-regime effect — so it must be visible. Computed
+# on the full price history (not just the train/val/test slice) so a 200-day
+# trend is defined from the first bar of a test window.
+#   [close/SMA200-1, close/SMA50-1, ann.vol20, vol20/vol60]
+REGIME_OBS_DIM = 4
+OBS_DIM = MARKET_OBS_DIM + PORTFOLIO_OBS_DIM + REGIME_OBS_DIM  # 398
+# Explicit slices into the observation tail. The spiking encoder and the sensory
+# summary must use these rather than [-8:], because the blocks now occupy the tail.
 CUR_INDICATOR_SLICE = slice(MARKET_OBS_DIM - 8, MARKET_OBS_DIM)
+PORTFOLIO_SLICE = slice(MARKET_OBS_DIM, MARKET_OBS_DIM + PORTFOLIO_OBS_DIM)
+REGIME_SLICE = slice(MARKET_OBS_DIM + PORTFOLIO_OBS_DIM, OBS_DIM)
 
 # ── Anatomical partitions as fractions of N_NEURONS ────────────────────────
 # AL / KC / CX / DAN / MBON  (128 / 640 / 128 / 64 / 64 out of 1024)
@@ -89,6 +96,13 @@ SPLIT_PLANS = {
     "cycle": {
         "train": ("2015-01-01", "2019-12-31"),
         "val":   ("2020-01-01", "2021-06-30"),
+        "test":  ("2021-07-01", "2024-12-31"),
+    },
+    # Same full-cycle test, but training *includes the 2020 COVID crash* so the
+    # agent has at least one sustained drawdown to learn de-risking from.
+    "cycle_b": {
+        "train": ("2015-01-01", "2020-12-31"),
+        "val":   ("2021-01-01", "2021-06-30"),
         "test":  ("2021-07-01", "2024-12-31"),
     },
 }

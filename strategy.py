@@ -157,6 +157,16 @@ def baseline_probs(name: str, obs, *, shares: float, cash: float, prev_action: i
             p[6] = 1.0  # Sell 100%
         else:
             p[0] = 1.0
+    elif name == "trend200":
+        # Pure regime rule: long above the 200-day trend, flat below it. Reads the
+        # long-horizon regime block the env exposes (index -4 = close/SMA200-1).
+        dist200 = float(obs[-4]) if len(obs) >= 4 else 0.0
+        if dist200 > 0.0 and shares <= 1e-6:
+            p[3] = 1.0
+        elif dist200 <= 0.0 and shares > 0:
+            p[6] = 1.0  # Sell 100%
+        else:
+            p[0] = 1.0
     else:
         raise ValueError(f"unknown baseline: {name}")
     return p
@@ -177,6 +187,33 @@ def fly_prob_fn(agent):
     """
     def prob_fn(obs, _prev_action, _shares, _cash):
         return np.asarray(agent.select_action(obs, reward=0.0, deterministic=False)[1], dtype=np.float64)
+    return prob_fn
+
+
+def regime_gate_prob_fn(inner, *, dist200_threshold: float = 0.0,
+                        vol_ratio_threshold: Optional[float] = None):
+    """Deployment overlay: block new exposure (and exit) in a risk-off regime.
+
+    Reads the regime block the env exposes — ``obs[-4]`` is ``close/SMA200 - 1``
+    and ``obs[-1]`` is the short/long volatility ratio. When risk-off, buys are
+    removed and an existing position is closed.
+
+    This is a *pre-specified* risk overlay, not a learned behaviour. Measured
+    effect: it converts the (buy & hold-equivalent) learned policy into
+    trend/volatility timing, which beats buy & hold over a full cycle at the
+    cost of some upside in a pure bull run.
+    """
+    def prob_fn(obs, prev_action, shares, cash):
+        p = np.asarray(inner(obs, prev_action, shares, cash), dtype=np.float64).copy()
+        dist200 = float(obs[-4]) if len(obs) >= 4 else 0.0
+        vol_ratio = float(obs[-1]) if len(obs) >= 1 else 0.0
+        risk_off = dist200 < dist200_threshold
+        if vol_ratio_threshold is not None and vol_ratio > vol_ratio_threshold:
+            risk_off = True
+        if risk_off:
+            p[:] = 0.0
+            p[6 if shares > 1e-6 else 0] = 1.0   # exit, or stay flat
+        return p
     return prob_fn
 
 
@@ -274,6 +311,7 @@ def compare_on_env(
     seed: int = 0,
     include_legacy: bool = True,
     include_baselines: bool = True,
+    fly_wrapper=None,
 ) -> dict:
     """Run the fly policy (+ optional legacy mask) and baselines on one env.
 
@@ -285,8 +323,11 @@ def compare_on_env(
     results = {}
     if agent is not None:
         agent.reset()
+        fly = fly_prob_fn(agent)
+        if fly_wrapper is not None:
+            fly = fly_wrapper(fly)
         results["fly_honest"] = run_episode(
-            env_factory(), fly_prob_fn(agent), mask_preset="honest",
+            env_factory(), fly, mask_preset="honest",
             deterministic=deterministic, seed=seed,
         )
         if include_legacy:
@@ -296,7 +337,7 @@ def compare_on_env(
                 deterministic=deterministic, seed=seed,
             )
     if include_baselines:
-        for name in ("buy_hold", "momentum"):
+        for name in ("buy_hold", "momentum", "trend200"):
             results[name] = run_episode(
                 env_factory(), baseline_prob_fn(name), mask_preset="honest",
                 deterministic=True, seed=seed,

@@ -1,4 +1,5 @@
 import gymnasium as gym
+import math
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -42,12 +43,18 @@ class FlyTradeEnv(gym.Env):
         self.data = _load_ohlcv(data_path)
         required = ["Open", "High", "Low", "Close", "Volume"]
         assert all(col in self.data.columns for col in required), "Missing OHLCV columns"
+        # Compute the long-horizon regime block on the FULL history *before*
+        # slicing, otherwise a 200-day trend is undefined for the first ~10
+        # months of a test slice.
+        regime_full = self._compute_regime_block(self.data)
         # Optional inclusive date slicing, used for train/validation/test splits.
+        keep = np.ones(len(self.data), dtype=bool)
         if start_date is not None:
-            self.data = self.data[self.data.index >= pd.to_datetime(start_date)]
+            keep &= np.asarray(self.data.index >= pd.to_datetime(start_date))
         if end_date is not None:
-            self.data = self.data[self.data.index <= pd.to_datetime(end_date)]
-        self.data = self.data.copy()
+            keep &= np.asarray(self.data.index <= pd.to_datetime(end_date))
+        self.regime = regime_full[keep]
+        self.data = self.data[keep].copy()
         assert len(self.data) > window_size + 1, (
             f"Not enough rows ({len(self.data)}) after date slicing "
             f"[{start_date} .. {end_date}] for window_size={window_size}"
@@ -59,7 +66,8 @@ class FlyTradeEnv(gym.Env):
         n_ohlcv = window_size * len(required)
         n_ind = window_size * 8  # RSI, MACD, BB width, ATR, trend strength, vol regime, SMA ratio, EMA trend
         n_port = 4  # exposure, cash fraction, unrealised PnL, steps-since-trade
-        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind + n_port,), dtype=np.float32)
+        n_regime = 4  # dist SMA200, dist SMA50, ann. vol20, vol20/vol60
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind + n_port + n_regime,), dtype=np.float32)
         # 7 actions: Hold, Buy 25%, Buy 50%, Buy 100%, Sell 25%, Sell 50%, Sell 100%
         self.action_space = gym.spaces.Discrete(7)
         self.transaction_cost = transaction_cost
@@ -82,6 +90,51 @@ class FlyTradeEnv(gym.Env):
     # Fractional trade sizes for each action
     BUY_FRACTIONS = [0.0, 0.25, 0.50, 1.0, 0.0, 0.0, 0.0]
     SELL_FRACTIONS = [0.0, 0.0, 0.0, 0.0, 0.25, 0.50, 1.0]
+
+    @staticmethod
+    def _compute_regime_block(df) -> np.ndarray:
+        """Long-horizon trend/volatility context, one row per bar (no look-ahead).
+
+        Columns: [close/SMA200 - 1, close/SMA50 - 1, ann. vol20, vol20/vol60].
+        Rows before the lookback is available are neutral (0 trend, 0 vol).
+        """
+        close = df["Close"].values.astype(np.float64)
+        n = len(close)
+        out = np.zeros((n, 4), dtype=np.float32)
+        if n == 0:
+            return out
+        rets = np.zeros(n, dtype=np.float64)
+        rets[1:] = np.diff(close) / (close[:-1] + 1e-12)
+
+        def trailing_mean(k):
+            res = np.full(n, np.nan)
+            if n >= k:
+                c = np.cumsum(np.insert(close, 0, 0.0))
+                res[k - 1:] = (c[k:] - c[:-k]) / k
+            return res
+
+        def trailing_vol(k):
+            res = np.zeros(n, dtype=np.float64)
+            if n >= k:
+                c1 = np.cumsum(np.insert(rets, 0, 0.0))
+                c2 = np.cumsum(np.insert(rets ** 2, 0, 0.0))
+                for i in range(k - 1, n):
+                    m = (c1[i + 1] - c1[i + 1 - k]) / k
+                    m2 = (c2[i + 1] - c2[i + 1 - k]) / k
+                    res[i] = math.sqrt(max(0.0, m2 - m * m)) * math.sqrt(252.0)
+            return res
+
+        sma50, sma200 = trailing_mean(50), trailing_mean(200)
+        vol20, vol60 = trailing_vol(20), trailing_vol(60)
+        trend200 = np.where(np.isnan(sma200) | (sma200 <= 1e-9), 0.0,
+                            close / (sma200 + 1e-12) - 1.0)
+        trend50 = np.where(np.isnan(sma50) | (sma50 <= 1e-9), 0.0,
+                           close / (sma50 + 1e-12) - 1.0)
+        out[:, 0] = np.clip(trend200, -1.0, 1.0)
+        out[:, 1] = np.clip(trend50, -1.0, 1.0)
+        out[:, 2] = np.clip(vol20, 0.0, 3.0)
+        out[:, 3] = np.clip(vol20 / (vol60 + 1e-9), 0.0, 3.0)
+        return out
 
     def _compute_indicators(self):
         close = self.data["Close"].values.astype(np.float64)
@@ -212,7 +265,10 @@ class FlyTradeEnv(gym.Env):
             unreal = 0.0
         recency = float(np.clip((self.current_step - self.last_trade_step) / 30.0, 0.0, 1.0))
         port = np.array([exposure, cash_frac, unreal, recency], dtype=np.float32)
-        return np.concatenate([ohlcv, ind, port])
+        # Long-horizon regime context for the *current* bar.
+        ridx = min(idx + self.window_size - 1, len(self.regime) - 1)
+        regime = self.regime[ridx] if ridx >= 0 and len(self.regime) else np.zeros(4, dtype=np.float32)
+        return np.concatenate([ohlcv, ind, port, np.asarray(regime, dtype=np.float32)])
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
