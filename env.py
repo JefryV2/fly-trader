@@ -1,0 +1,369 @@
+import gymnasium as gym
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+
+def _load_ohlcv(path: Path) -> pd.DataFrame:
+    """Load a yfinance-saved CSV robustly regardless of header format."""
+    raw = pd.read_csv(path, header=0)
+    # yfinance multi-header: first col is 'Price', rows 0='Ticker', 1='Date'
+    # Real data starts at row 2. Detect this by checking first column name.
+    first_col = raw.columns[0]
+    if first_col == 'Price':
+        # Skip the two metadata rows, rename first col to Date
+        raw = raw.iloc[2:].reset_index(drop=True)
+        raw = raw.rename(columns={first_col: 'Date'})
+    elif first_col.lower() not in ('date', 'datetime'):
+        raw = raw.rename(columns={first_col: 'Date'})
+
+    raw['Date'] = pd.to_datetime(raw['Date'], errors='coerce')
+    raw = raw.dropna(subset=['Date']).set_index('Date')
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        raw[col] = pd.to_numeric(raw[col], errors='coerce')
+    raw = raw[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+    return raw
+
+
+class FlyTradeEnv(gym.Env):
+    """Gymnasium environment for stock trading using the FlyTrader model.
+
+    Observation: A vector of recent OHLCV values plus technical indicators.
+    Action: Discrete space -> 0: Hold, 1: Buy 25%, 2: Buy 50%, 3: Buy 100%, 4: Sell 25%, 5: Sell 50%, 6: Sell 100%.
+    Reward: Risk-adjusted return (log-return + drawdown penalty + Sharpe bonus + volatility penalty).
+    Transaction cost: 0.1% of trade value, deducted from each buy/sell.
+    """
+    metadata = {"render_modes": ["human"]}
+
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False):
+        super().__init__()
+        self.window_size = window_size
+        self.initial_cash = initial_cash
+        self.data = _load_ohlcv(data_path)
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        assert all(col in self.data.columns for col in required), "Missing OHLCV columns"
+        self.n_steps = len(self.data) - self.window_size
+        self._compute_indicators()
+        n_ohlcv = window_size * len(required)
+        n_ind = window_size * 8  # RSI, MACD, BB width, ATR, trend strength, vol regime, SMA ratio, EMA trend
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind,), dtype=np.float32)
+        # 7 actions: Hold, Buy 25%, Buy 50%, Buy 100%, Sell 25%, Sell 50%, Sell 100%
+        self.action_space = gym.spaces.Discrete(7)
+        self.transaction_cost = transaction_cost
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.enable_sl_tp = enable_sl_tp
+        self.reset()
+
+    # Fractional trade sizes for each action
+    BUY_FRACTIONS = [0.0, 0.25, 0.50, 1.0, 0.0, 0.0, 0.0]
+    SELL_FRACTIONS = [0.0, 0.0, 0.0, 0.0, 0.25, 0.50, 1.0]
+
+    def _compute_indicators(self):
+        close = self.data["Close"].values.astype(np.float64)
+        high = self.data["High"].values.astype(np.float64)
+        low = self.data["Low"].values.astype(np.float64)
+        vol = self.data["Volume"].values.astype(np.float64)
+        n = len(close)
+
+        # --- RSI ---
+        rsi = np.full(n, 50.0, dtype=np.float64)
+        deltas = np.diff(close, prepend=close[0])
+        for i in range(1, n):
+            win_gains = deltas[max(0, i-13):i+1]
+            gain = np.sum(win_gains[win_gains > 0])
+            loss = -np.sum(win_gains[win_gains < 0])
+            if loss > 0:
+                rs = gain / loss
+                rsi[i] = 100.0 - 100.0 / (1.0 + rs)
+            else:
+                rsi[i] = 100.0 if gain > 0 else 50.0
+
+        # --- MACD ---
+        macd_line = np.full(n, 0.0, dtype=np.float64)
+        signal_line = np.full(n, 0.0, dtype=np.float64)
+        for i in range(n):
+            e12 = close[max(0, i-11):i+1]
+            e26 = close[max(0, i-25):i+1]
+            if len(e12) >= 2:
+                macd_line[i] = np.mean(e12[-12:]) - np.mean(e26[-26:]) if len(e26) >= 26 else np.mean(e12[-12:])
+            if i >= 8:
+                signal_line[i] = np.mean(macd_line[max(0, i-8):i+1])
+        macd_hist = macd_line - signal_line
+
+        # --- Bollinger Band Width ---
+        bb_width = np.full(n, 0.0, dtype=np.float64)
+        for i in range(n):
+            win = close[max(0, i-19):i+1]
+            if len(win) >= 5:
+                m = np.mean(win)
+                s = np.std(win)
+                bb_width[i] = (m + 2*s - (m - 2*s)) / (m + 1e-9)
+
+        # --- ATR ---
+        atr = np.full(n, 0.0, dtype=np.float64)
+        tr = np.maximum(high - low, np.maximum(np.abs(high - np.roll(close, 1)), np.abs(low - np.roll(close, 1))))
+        tr[0] = high[0] - low[0]
+        for i in range(n):
+            win = tr[max(0, i-13):i+1]
+            atr[i] = np.mean(win) if len(win) > 0 else 0.0
+
+        # --- Market Regime Features ---
+        # Trend strength: slope of recent price action
+        trend_strength = np.full(n, 0.0, dtype=np.float64)
+        for i in range(n):
+            win = close[max(0, i-19):i+1]
+            if len(win) >= 5:
+                x = np.arange(len(win))
+                slope = np.polyfit(x, win, 1)[0]
+                trend_strength[i] = slope / (np.mean(win) + 1e-9)
+
+        # Volatility regime: recent vs long-term volatility
+        vol_regime = np.full(n, 0.0, dtype=np.float64)
+        for i in range(n):
+            short_vol = np.std(close[max(0, i-4):i+1]) if i >= 4 else np.std(close[:i+1])
+            long_vol = np.std(close[max(0, i-19):i+1]) if i >= 19 else np.std(close[:i+1])
+            vol_regime[i] = short_vol / (long_vol + 1e-9) if long_vol > 0 else 1.0
+
+        # --- Trend Indicators ---
+        # SMA(10) and SMA(20) ratio
+        sma10 = np.full(n, 0.0, dtype=np.float64)
+        sma20 = np.full(n, 0.0, dtype=np.float64)
+        sma_ratio = np.full(n, 1.0, dtype=np.float64)
+        for i in range(n):
+            if i >= 9:
+                sma10[i] = np.mean(close[i-9:i+1])
+            if i >= 19:
+                sma20[i] = np.mean(close[i-19:i+1])
+            if sma20[i] > 1e-9:
+                sma_ratio[i] = sma10[i] / sma20[i]
+
+        # EMA(10) trend
+        ema10 = np.full(n, 0.0, dtype=np.float64)
+        ema_trend = np.full(n, 0.0, dtype=np.float64)
+        if n > 0:
+            ema10[0] = close[0]
+            alpha = 2.0 / (10 + 1)
+            for i in range(1, n):
+                ema10[i] = alpha * close[i] + (1 - alpha) * ema10[i-1]
+            for i in range(n):
+                if ema10[i] > 1e-9:
+                    ema_trend[i] = (close[i] - ema10[i]) / ema10[i]
+
+        self.indicators = np.stack([rsi, macd_hist, bb_width, atr, trend_strength, vol_regime, sma_ratio, ema_trend], axis=1).astype(np.float32)
+
+    def _get_observation(self, idx: int) -> np.ndarray:
+        window = self.data.iloc[idx : idx + self.window_size][["Open", "High", "Low", "Close", "Volume"]]
+        norm = window["Close"].iloc[0]
+        ohlcv = (window / norm).values.flatten().astype(np.float32)
+        ind = self.indicators[idx : idx + self.window_size].flatten()
+        # Z-score normalize indicators for stable learning
+        ind_mean = np.mean(ind)
+        ind_std = np.std(ind)
+        if ind_std > 1e-6:
+            ind = (ind - ind_mean) / ind_std
+        return np.concatenate([ohlcv, ind])
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.current_step = 0
+        self.cash = self.initial_cash
+        self.shares = 0
+        self.portfolio_history = []
+        self.entry_price = 0.0  # Track entry price for stop-loss/take-profit
+        self.highest_price = 0.0  # Track highest price since entry
+        self.last_trade_step = -10  # Track last trade step for overtrading penalty
+        self.steps_in_cash = 0  # Track consecutive steps holding 100% cash
+        obs = self._get_observation(self.current_step)
+        return obs, {}
+
+    def _apply_action(self, action: int, price: float, confidence: float = 1.0):
+        """Execute fractional trade based on action (0-6) and confidence (0-1)."""
+        if self.cash > 0 and action >= 1 and action <= 3:
+            fraction = self.BUY_FRACTIONS[action] * confidence
+            amount = self.cash * fraction
+            if amount > 0:
+                self.shares += amount / price
+                self.cash -= amount
+                self.cash -= amount * self.transaction_cost
+        elif self.shares > 0 and action >= 4:
+            fraction = self.SELL_FRACTIONS[action]
+            amount = self.shares * fraction
+            if amount > 0:
+                self.cash += amount * price
+                self.shares -= amount
+                self.cash -= amount * price * self.transaction_cost
+            # Reset tracking if fully sold
+            if self.shares <= 1e-9:
+                self.entry_price = 0.0
+                self.highest_price = 0.0
+
+    def step(self, action: int, confidence: float = 1.0):
+        if self.current_step >= self.n_steps:
+            idx = len(self.data) - 1
+            price = float(self.data.iloc[idx]["Close"])
+            pv = float(self.cash + self.shares * price)
+            return np.zeros_like(self.observation_space.low), 0.0, True, False, {"portfolio_value": pv}
+
+        # Execute action at the close price of the current step
+        idx = min(self.current_step + self.window_size - 1, len(self.data) - 1)
+        price = float(self.data.iloc[idx]["Close"])
+        
+        if self.cash > 0 and action >= 1 and action <= 3:
+            fraction = self.BUY_FRACTIONS[action] * confidence
+            max_amount = self.cash / (1 + self.transaction_cost)  # Account for transaction cost
+            amount = self.cash * fraction
+            if amount > max_amount:
+                amount = max_amount
+            if amount > 0:
+                self.shares += amount / price
+                self.cash -= amount * (1 + self.transaction_cost)
+        elif self.shares > 0 and action >= 4:
+            fraction = self.SELL_FRACTIONS[action]
+            amount = self.shares * fraction
+            if amount > 0:
+                sell_value = amount * price
+                self.cash += sell_value * (1 - self.transaction_cost)
+                self.shares -= amount
+            # Reset tracking if fully sold
+            if self.shares <= 1e-9:
+                self.entry_price = 0.0
+                self.highest_price = 0.0
+
+        # Track entry price and highest price for stop-loss/take-profit
+        if self.shares > 0 and self.entry_price == 0.0:
+            self.entry_price = price
+        if self.shares > 0 and price > self.highest_price:
+            self.highest_price = price
+
+        # Check stop-loss and take-profit (only if enabled)
+        stop_loss_triggered = False
+        take_profit_triggered = False
+        if self.enable_sl_tp and self.shares > 0 and self.entry_price > 0:
+            drawdown_from_entry = (self.entry_price - price) / self.entry_price
+            gain_from_entry = (price - self.entry_price) / self.entry_price
+            if drawdown_from_entry >= self.stop_loss:
+                stop_loss_triggered = True
+            elif gain_from_entry >= self.take_profit:
+                take_profit_triggered = True
+
+        # Auto-execute stop-loss or take-profit
+        if stop_loss_triggered or take_profit_triggered:
+            sell_value = self.shares * price
+            self.cash += sell_value
+            self.shares = 0.0
+            self.cash -= sell_value * self.transaction_cost
+            self.entry_price = 0.0
+            self.highest_price = 0.0
+
+        # Advance
+        self.current_step += 1
+        done = self.current_step >= self.n_steps
+        next_obs = self._get_observation(self.current_step) if not done else np.zeros_like(self.observation_space.low)
+
+        # Compute portfolio value and reward
+        portfolio_value = float(self.cash + self.shares * price)
+        self.portfolio_history.append(portfolio_value)
+
+        # Get current observation for regime-aware rewards
+        current_obs = self._get_observation(min(self.current_step, len(self.data) - self.window_size - 1))
+        obs_flat = current_obs
+
+        # --- Reward ---
+        if len(self.portfolio_history) > 1:
+            prev = self.portfolio_history[-2]
+            curr = self.portfolio_history[-1]
+            if prev > 1e-6 and curr > 1e-6:
+                log_ret = float(np.log(curr / prev))
+            else:
+                log_ret = 0.0
+        else:
+            log_ret = 0.0
+
+        # Scaled return for meaningful learning signal
+        reward = log_ret * 100.0
+
+        # --- Regime-aware guidance ---
+        # Observation layout: 150 OHLCV features + 240 indicator features (8 x 30)
+        # Last features = current-step indicators: [rsi, macd_hist, bb_width, atr,
+        #                                           trend_strength, vol_regime,
+        #                                           sma_ratio, ema_trend]
+        trend_strength = obs_flat[-4] if len(obs_flat) >= 4 else 0.0
+        ema_trend = obs_flat[-1] if len(obs_flat) >= 1 else 0.0
+
+        # --- Regime-aware guidance ---
+        trend_strength = float(obs_flat[-4]) if len(obs_flat) >= 4 else 0.0
+        ema_trend = float(obs_flat[-1]) if len(obs_flat) >= 1 else 0.0
+
+        # 1. Position Entry (Buying)
+        if action in [1, 2, 3]:
+            # Neutralize entry transaction fee impact from immediate step reward
+            # so the RL gradient does not penalize taking action to open positions
+            reward = max(reward, 0.0)
+            if ema_trend > 0.005:
+                # Strong positive reward for entering position into an uptrend
+                reward += 0.25 if self.shares <= 1e-6 else 0.10
+            elif ema_trend > -0.005:
+                # Mild encouragement for exploratory position opening in neutral market
+                reward += 0.08
+            elif ema_trend < -0.015:
+                # Punish buying into clear falling knife / bear plunge
+                reward -= 0.20  # Increased from -0.12
+
+        # 2. Position Management (Holding)
+        if action == 0:
+            if self.shares > 0 and ema_trend > 0.01:
+                # Reward riding profitable uptrend
+                reward += 0.06
+            elif self.shares <= 1e-6 and ema_trend < -0.015:
+                # Reward patient cash preservation only in clear bear regimes
+                reward += 0.03
+            elif self.shares > 0 and ema_trend < -0.01:
+                # Punish bag-holding through a clear downtrend
+                reward -= 0.10  # Increased from -0.06
+
+        # 3. Capital Protection (Selling)
+        if action in [4, 5, 6]:
+            if self.shares > 0 and ema_trend < -0.01:
+                # Reward timely exit / stop loss protecting capital
+                reward += 0.15  # Increased from +0.08 to encourage selling in downtrend
+            elif self.shares > 0 and ema_trend > 0.03:
+                # Discourage premature exit during strong momentum
+                reward -= 0.02
+
+        # 4. Anti-churn overtrading penalty
+        if action != 0:
+            steps_since_last_trade = self.current_step - self.last_trade_step
+            if steps_since_last_trade < 2:
+                reward -= 0.10  # Increased from -0.03 to discourage overtrading
+            self.last_trade_step = self.current_step
+
+        # 5. Opportunity cost / cash inactivity penalty: sitting in cash forever is penalized
+        if self.shares <= 1e-6:
+            self.steps_in_cash = getattr(self, 'steps_in_cash', 0) + 1
+            if ema_trend > 0.002:
+                # Moderate penalty for missing active bull trend while idling in 100% cash
+                reward -= 0.05  # Reduced from -0.15
+            elif self.steps_in_cash > 2:
+                # Steady inactivity penalty for idling in cash
+                reward -= 0.02  # Reduced from -0.05
+        else:
+            self.steps_in_cash = 0
+
+        # Terminal bonus based on final portfolio performance - reduced to balance with Sharpe
+        if done:
+            total_return = (portfolio_value - self.initial_cash) / self.initial_cash
+            reward += 0.3 * total_return  # +0.3 for 100% total return
+
+        # Safety
+        if not np.isfinite(reward):
+            reward = 0.0
+        info = {"portfolio_value": float(portfolio_value)}
+        return next_obs, reward, done, False, info
+
+    def render(self, mode="human"):
+        if mode == "human":
+            if self.portfolio_history:
+                print(f"Step {self.current_step}: Portfolio = ${self.portfolio_history[-1]:.2f}")
+        else:
+            pass

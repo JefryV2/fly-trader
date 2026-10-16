@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data (large; download on demand with data_fetch.py / fly_brain.py)
+data/
+flywire_data/
+flywire_weights/*.pkl
+
+# Model checkpoints / run artifacts
+web-app/checkpoints/*.pt
+*.pt
+*.zip
+*.pkl
+runs/
+mlruns/
+
+# Node (fly_connectome template)
+fly_connectome/node_modules/
+fly_connectome/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

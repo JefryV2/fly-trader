@@ -1,0 +1,2162 @@
+/* ═══════════════════════════════════════════════════════════════
+   FlyTrader – script.js (v0.5)
+   MaleCNS 1024-LIF Drosophila Connectome Visualizer & RL Trader
+   ═══════════════════════════════════════════════════════════════ */
+
+const API = 'http://127.0.0.1:8000';
+
+/* ─────────────────────────────────────────────
+   State
+───────────────────────────────────────────── */
+let N_NEURONS = 1024; // Updated from server /brain_status at boot
+let portfolioHistory = [100000];
+let rewardHistory    = [];
+let spikeData = new Array(N_NEURONS).fill(0);
+let spikeData1024 = spikeData; // Alias for backward compatibility
+let voltageHistory   = { al: [], kc: [], cx: [], dan: [], mbon: [] };
+let autoPilot        = false;
+let autoTimer        = null;
+let stepCount        = 0;
+let lastAction       = 0;
+let currentDopamine  = 0.0;
+let totalEpisodes    = 0;
+let lastTrainData    = null; // Stores last /train_batch response for the lab
+let learningHistory  = [];  // Persistent learning history from /learning_history
+let brainNeedsUpdate = true; // Drive 3-D brain refresh from the render loop
+
+/* ─────────────────────────────────────────────
+   DOM refs
+───────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const qPortfolio   = $('portfolio-val');
+const qReturn      = $('return-val');
+const qSharpe      = $('sharpe-val');
+const qDrawdown    = $('drawdown-val');
+const qWinrate     = $('winrate-val');
+const qStep        = $('step-val');
+const qStatus      = $('status-text');
+const qDot         = document.querySelector('.dot');
+const qSpikeRate   = $('spike-rate');
+const qTradeLog    = $('trade-log');
+const qSpeedSlider = $('speed-slider');
+const qSpeedVal    = $('speed-val');
+const qAutoBtn     = $('auto-btn');
+const qAvgReward   = $('avg-reward');
+const qLastReward  = $('last-reward');
+const qActivityBars = $('activity-bars');
+const qDopaminePill = $('dopamine-pill');
+const qDopamineVal  = $('dopamine-val');
+const qBrainBadge   = $('brain-badge');
+
+// Deliberation probability bars
+const qProbHoldFill = $('prob-hold-fill');
+const qProbHoldText = $('prob-hold-text');
+const qProbBuyFill  = $('prob-buy-fill');
+const qProbBuyText  = $('prob-buy-text');
+const qProbSellFill = $('prob-sell-fill');
+const qProbSellText = $('prob-sell-text');
+
+// Neuropil meters
+const qRateAL   = $('rate-al');
+const qValAL    = $('val-al');
+const qRateKC   = $('rate-kc');
+const qValKC    = $('val-kc');
+const qRateCX   = $('rate-cx');
+const qValCX    = $('val-cx');
+const qRateDAN  = $('rate-dan');
+const qValDAN   = $('val-dan');
+const qRateMBON = $('rate-mbon');
+const qValMBON  = $('val-mbon');
+
+/* ─────────────────────────────────────────────
+   Tab Switching
+───────────────────────────────────────────── */
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = $('tab-' + tab);
+      if (panel) panel.classList.add('active');
+      // Redraw canvases that may have been hidden
+      if (tab === 'stats') { drawRewardChartBig(); fetchLearningHistory(); fetchSimulationHistory(); }
+      if (tab === 'sims')  { fetchSimulationHistory(); }
+    });
+  });
+}
+
+/* ─────────────────────────────────────────────
+   API helpers
+───────────────────────────────────────────── */
+async function apiPing() {
+  try {
+    const r = await fetch(`${API}/ping`);
+    if (r.ok) setStatus('live', 'API Live');
+    else       setStatus('error', 'API Error');
+  } catch {
+    setStatus('error', 'API Offline');
+  }
+}
+
+async function apiReset() {
+  try {
+    const r = await fetch(`${API}/reset`);
+    const d = await r.json();
+    portfolioHistory = [d.portfolio];
+    rewardHistory    = [];
+    stepCount        = 0;
+    voltageHistory   = { al: [], kc: [], cx: [], dan: [], mbon: [] };
+    qTradeLog.innerHTML = '';
+    updatePortfolioCard(d.portfolio, 0, 0, 0);
+    qSharpe.textContent   = '—';
+    qDrawdown.textContent = '—';
+    qWinrate.textContent  = '—';
+    qStep.textContent     = '0';
+    spikeData = new Array(N_NEURONS).fill(0);
+    spikeData1024 = spikeData;
+    currentDopamine       = 0.0;
+    updateDopamineUI(0.0);
+    drawPortfolioChart();
+    drawRewardChart();
+    drawHeatmap(spikeData);
+    updateActivityBars(spikeData, null);
+    updateBrainViz(spikeData1024, 0.0);
+    drawOscilloscope();
+    updateNeuronCountDisplay();
+    toast('Episode reset ↺', '');
+  } catch(e) {
+    setStatus('error', 'API Offline');
+  }
+}
+
+async function apiStep(manualAction = -1) {
+  const policy = document.querySelector('input[name="policy"]:checked')?.value || 'brain';
+  const learning = $('learning-toggle')?.checked ?? true;
+
+  let action = manualAction;
+  if (manualAction === -1) {
+    if (policy === 'brain') {
+      action = -1; // Tell server Fly Brain to deliberate
+    } else if (policy === 'momentum') {
+      action = Math.random() < 0.2 ? 0 : lastAction || 1;
+    } else if (policy === 'mean-revert') {
+      action = lastAction === 1 ? 2 : lastAction === 2 ? 1 : 1;
+    } else {
+      action = Math.floor(Math.random() * 3);
+    }
+  }
+
+  try {
+    const r = await fetch(`${API}/step`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, policy, learning })
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('API Error:', r.status, errText);
+      setStatus('error', `API ${r.status}`);
+      return null;
+    }
+    const d = await r.json();
+    handleStepResult(d);
+    return d;
+  } catch (err) {
+    console.error('Fetch error:', err);
+    setStatus('error', 'API Offline');
+    return null;
+  }
+}
+
+async function apiTrainBatch() {
+  const btn = $('train-batch-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="btn-icon">⏳</span><span>Evolving Neural Synapses…</span>`;
+
+  try {
+    const r = await fetch(`${API}/train_batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodes: 25 })
+    });
+    const d = await r.json();
+    if (d.status === 'success') {
+      lastTrainData = d;
+      totalEpisodes = d.total_episodes;
+      qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
+      toast(`⚡ Trained 25 Episodes! Avg Return: ${d.avg_return_pct > 0 ? '+' : ''}${d.avg_return_pct}%`, 'buy-toast');
+      // Auto-open the lab to show results
+      openLabModal(d);
+      await apiReset();
+      await fetchLearningHistory();
+      await fetchSimulationHistory();
+    }
+  } catch(e) {
+    toast('Training failed: API offline', 'sell-toast');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span class="btn-icon">⚡</span><span>Evolve Fly Brain (Train 25 Eps)</span>`;
+    // Re-enable simulations button if we have data
+    const simsBtn = $('train-sims-btn');
+    if (simsBtn && totalEpisodes > 0) simsBtn.disabled = false;
+  }
+}
+
+async function apiRunSimulations() {
+  const btn = $('train-sims-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="btn-icon">🔄</span><span>Running 5 Simulations…</span>`;
+  
+  try {
+    let totalResults = null;
+    // Run 5 simulations of 25 episodes each (server caps at 100 per call)
+    for (let i = 0; i < 5; i++) {
+      btn.innerHTML = `<span class="btn-icon">🔄</span><span>Simulation ${i+1}/5…</span>`;
+      const r = await fetch(`${API}/train_batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodes: 25 })
+      });
+      const d = await r.json();
+      if (d.status === 'success') {
+        totalResults = d;
+        // Update progress
+        totalEpisodes = d.total_episodes;
+        qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
+        lastTrainData = d;
+      } else {
+        throw new Error('Training failed');
+      }
+      // Small delay between simulations
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    if (totalResults) {
+      toast(`⚡ Completed 5 Simulations! Avg Return: ${totalResults.avg_return_pct > 0 ? '+' : ''}${totalResults.avg_return_pct}%`, 'buy-toast');
+      // Auto-open the lab to show results
+      openLabModal(totalResults);
+      await apiReset();
+      await fetchLearningHistory();
+      await fetchSimulationHistory();
+    }
+  } catch(e) {
+    toast('Simulations failed: API offline', 'sell-toast');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span class="btn-icon">🔄</span><span>Run 5 Simulations</span>`;
+  }
+}
+
+/* ─────────────────────────────────────────────
+   Handle step result
+───────────────────────────────────────────── */
+function handleStepResult(d) {
+  if (!d || d.step === undefined) return;
+  stepCount = d.step;
+
+  if (d.history && d.history.length > 0) portfolioHistory = d.history;
+  const reward = typeof d.reward === 'number' && isFinite(d.reward) ? d.reward : 0;
+  rewardHistory.push(reward);
+  if (rewardHistory.length > 200) rewardHistory.shift();
+
+  spikeData = d.spikes_full || new Array(N_NEURONS).fill(0);
+  spikeData1024 = spikeData; // Alias for backward compatibility
+  lastAction      = d.action_idx;
+  currentDopamine = d.dopamine || 0.0;
+  updateNeuronCountDisplay();
+
+  const sharpe = typeof d.sharpe === 'number' && isFinite(d.sharpe) ? d.sharpe.toFixed(3) : '0.000';
+  const drawdown = typeof d.drawdown === 'number' && isFinite(d.drawdown) ? d.drawdown.toFixed(1) : '0.0';
+  const winrate = typeof d.win_rate === 'number' && isFinite(d.win_rate) ? d.win_rate.toFixed(1) : '0.0';
+  const totalReturn = typeof d.total_return === 'number' && isFinite(d.total_return) ? d.total_return : 0;
+  const portfolio = typeof d.portfolio === 'number' && isFinite(d.portfolio) ? d.portfolio : 100000;
+
+  // Update cards
+  updatePortfolioCard(portfolio, totalReturn, reward, d.action_idx);
+  qSharpe.textContent   = sharpe;
+  qDrawdown.textContent = drawdown + '%';
+  qWinrate.textContent  = winrate + '%';
+  qStep.textContent     = d.step;
+
+  // Topbar chips
+  const tbSharpe   = $('tb-sharpe');   if (tbSharpe)   tbSharpe.textContent   = sharpe;
+  const tbDrawdown = $('tb-drawdown'); if (tbDrawdown) tbDrawdown.textContent = drawdown + '%';
+  const tbWinrate  = $('tb-winrate');  if (tbWinrate)  tbWinrate.textContent  = winrate + '%';
+  const tbStep     = $('tb-step');     if (tbStep)     tbStep.textContent     = `${d.step} / 723`;
+
+  // Stats tab mirrors
+  const perfSharpe   = $('perf-sharpe');   if (perfSharpe)   perfSharpe.textContent   = sharpe;
+  const perfDrawdown = $('perf-drawdown'); if (perfDrawdown) perfDrawdown.textContent = drawdown + '%';
+  const perfWinrate  = $('perf-winrate');  if (perfWinrate)  perfWinrate.textContent  = winrate + '%';
+
+  // Dopamine & Action Probabilities
+  updateDopamineUI(currentDopamine);
+  if (d.action_probs && d.action_probs.length === 7) {
+    updateDeliberationBars(d.action_probs, d.action_idx);
+  }
+
+  // Voltages (Vm) – accumulate for oscilloscope
+  if (d.voltages) {
+    const vg = d.voltages;
+    const push = (arr, val) => { arr.push(val); if (arr.length > 120) arr.shift(); };
+    if (vg.al   !== undefined) push(voltageHistory.al,   vg.al);
+    if (vg.kc   !== undefined) push(voltageHistory.kc,   vg.kc);
+    if (vg.cx   !== undefined) push(voltageHistory.cx,   vg.cx);
+    if (vg.dan  !== undefined) push(voltageHistory.dan,  vg.dan);
+    if (vg.mbon !== undefined) push(voltageHistory.mbon, vg.mbon);
+    updateVmLabels(vg);
+  }
+
+  // Neuropil rates
+  if (d.regions) {
+    updateNeuropilMeters(d.regions);
+    qSpikeRate.textContent = `Spike rate: ${d.regions.spike_rate_pct}% (${d.regions.total_active} active)`;
+  }
+
+  // Reward stats
+  const avg = rewardHistory.reduce((a, b) => a + b, 0) / (rewardHistory.length || 1);
+  qAvgReward.textContent  = avg.toFixed(5);
+  qLastReward.textContent = d.reward.toFixed(5);
+  // Mirror to other tabs
+  const paR = $('perf-avg-reward'); if (paR) paR.textContent = avg.toFixed(5);
+  const arC = $('avg-reward-ctrl'); if (arC) arC.textContent = avg.toFixed(5);
+  const lrC = $('last-reward-ctrl'); if (lrC) lrC.textContent = d.reward.toFixed(5);
+
+  // HUD badges
+  const hudDa = $('hud-dopamine');
+  const hudVm = $('hud-voltage');
+  if (hudDa) hudDa.textContent = `DA: ${currentDopamine > 0 ? '+' : ''}${currentDopamine.toFixed(3)}`;
+  if (hudVm && d.voltages?.dan !== undefined) {
+    hudVm.textContent = `Vm: ${d.voltages.dan.toFixed(1)} mV`;
+  }
+
+  // 3-D Brain & 2-D Charts
+  drawPortfolioChart();
+  drawRewardChart();
+  drawHeatmap(spikeData);
+  updateActivityBars(spikeData, d.regions);
+  brainNeedsUpdate = true;
+  drawOscilloscope();
+
+  // Trade log
+  if (d.trades && d.trades.length > 0) {
+    const trade = d.trades[d.trades.length - 1];
+    if (trade.step === d.step) appendTrade(trade);
+  }
+
+  // Toast on trades — 7-action space: 1-3 = Buy, 4-6 = Sell
+  if (d.action_idx >= 1 && d.action_idx <= 3) toast(`▲ ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'buy-toast');
+  if (d.action_idx >= 4 && d.action_idx <= 6) toast(`▼ ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'sell-toast');
+
+  if (d.done) {
+    if (autoPilot) {
+      // Auto-loop: reset and continue learning!
+      toast('🔄 Episode done — auto-looping for continued learning…', '');
+      // We return true to signal done so scheduleNext won't double-schedule
+      setTimeout(async () => {
+        if (autoPilot) {
+          await apiReset();
+          scheduleNext();
+        }
+      }, 800);
+    } else {
+      toast('🏁 Episode complete! Press Auto-Pilot to continue learning.', '');
+    }
+  }
+}
+
+function updateVmLabels(vg) {
+  const pairs = [
+    ['vm-al',   vg.al],
+    ['vm-kc',   vg.kc],
+    ['vm-cx',   vg.cx],
+    ['vm-dan',  vg.dan],
+    ['vm-mbon', vg.mbon],
+  ];
+  pairs.forEach(([id, val]) => {
+    const el = $(id);
+    if (el && val !== undefined) {
+      el.textContent = `${val.toFixed(1)} mV`;
+      // Color: near threshold (-55) → amber, below resting (-70) → dim
+      if (val > -58) {
+        el.style.color = '#f59e0b';
+      } else if (val > -65) {
+        el.style.color = '#7dd3fc';
+      } else {
+        el.style.color = 'var(--txt-dim)';
+      }
+    }
+  });
+}
+
+function updateDopamineUI(da) {
+  qDopamineVal.textContent = (da > 0 ? '+' : '') + da.toFixed(3);
+  if (da < -0.05) {
+    qDopaminePill.classList.add('negative');
+  } else {
+    qDopaminePill.classList.remove('negative');
+  }
+}
+
+function updateDeliberationBars(probs, activeAction) {
+  // Initialize all bar references
+  const bars = {
+    'bar-grp-hold': { fill: 'prob-hold-fill', text: 'prob-hold-text', active: 0 },
+    'bar-grp-buy25': { fill: 'prob-buy25-fill', text: 'prob-buy25-text', active: 1 },
+    'bar-grp-buy50': { fill: 'prob-buy50-fill', text: 'prob-buy50-text', active: 2 },
+    'bar-grp-buy100': { fill: 'prob-buy100-fill', text: 'prob-buy100-text', active: 3 },
+    'bar-grp-sell25': { fill: 'prob-sell25-fill', text: 'prob-sell25-text', active: 4 },
+    'bar-grp-sell50': { fill: 'prob-sell50-fill', text: 'prob-sell50-text', active: 5 },
+    'bar-grp-sell100': { fill: 'prob-sell100-fill', text: 'prob-sell100-text', active: 6 }
+  };
+
+  // Update each bar
+  for (const [id, config] of Object.entries(bars)) {
+    const prob = probs[config.active];
+    $(config.fill).style.width = `${Math.round(prob * 100)}%`;
+    $(config.text).textContent = `${Math.round(prob * 100)}%`;
+    $(id).style.opacity = activeAction === config.active ? '1' : '0.65';
+  }
+}
+
+function updateNeuropilMeters(r) {
+  qRateAL.style.width   = `${Math.min(100, r.antennal_lobe * 2.5)}%`;
+  qValAL.textContent    = `${r.antennal_lobe}%`;
+
+  qRateKC.style.width   = `${Math.min(100, r.kenyon_cells * 3.5)}%`;
+  qValKC.textContent    = `${r.kenyon_cells}%`;
+
+  qRateCX.style.width   = `${Math.min(100, r.central_complex * 2.5)}%`;
+  qValCX.textContent    = `${r.central_complex}%`;
+
+  qRateDAN.style.width  = `${Math.min(100, r.dopamine_dan * 2.5)}%`;
+  qValDAN.textContent   = `${r.dopamine_dan}%`;
+
+  qRateMBON.style.width = `${Math.min(100, r.mbon_output * 2.5)}%`;
+  qValMBON.textContent  = `${r.mbon_output}%`;
+}
+
+function updatePortfolioCard(val, ret, reward, action) {
+  const fmt = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sign = ret >= 0 ? '+' : '';
+  const retStr = `${sign}${ret.toFixed(2)}%`;
+  const cls = ret >= 0 ? 'pos' : 'neg';
+
+  qPortfolio.textContent = `$${fmt}`;
+  qReturn.textContent = retStr;
+  qReturn.className = `card-sub ${cls}`;
+
+  // Topbar chips
+  const tbPort = $('tb-portfolio');
+  const tbRet  = $('tb-return');
+  if (tbPort) tbPort.textContent = `$${val.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  if (tbRet)  { tbRet.textContent = retStr; tbRet.className = `stat-chip-val ${cls}`; }
+
+  // Stats tab mirrors
+  const perfPort = $('perf-portfolio');
+  const perfRet  = $('perf-return');
+  if (perfPort) perfPort.textContent = `$${fmt}`;
+  if (perfRet)  { perfRet.textContent = retStr; perfRet.className = `perf-val ${cls}`; }
+}
+
+/* ─────────────────────────────────────────────
+   Oscilloscope (Membrane Potential Vm trace)
+───────────────────────────────────────────── */
+function drawOscilloscope() {
+  const canvas = $('oscilloscope-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.clientWidth || canvas.width;
+  const H = canvas.clientHeight || canvas.height;
+  canvas.width  = W;
+  canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw per-region traces
+  const traces = [
+    { arr: voltageHistory.al,   color: '#00e5ff', label: 'AL' },
+    { arr: voltageHistory.kc,   color: '#8c52ff', label: 'KC' },
+    { arr: voltageHistory.cx,   color: '#ffb703', label: 'CX' },
+    { arr: voltageHistory.dan,  color: '#ff3366', label: 'DAN' },
+    { arr: voltageHistory.mbon, color: '#00f59b', label: 'MBON' },
+  ];
+
+  const VM_MIN = -80, VM_MAX = -40;
+  const range = VM_MAX - VM_MIN;
+
+  // Background grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = (i / 4) * H;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Threshold line at -55 mV
+  const threshY = H - (((-55) - VM_MIN) / range) * H;
+  ctx.strokeStyle = 'rgba(255, 183, 3, 0.4)';
+  ctx.setLineDash([3, 3]);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, threshY); ctx.lineTo(W, threshY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw each trace
+  traces.forEach(({ arr, color }) => {
+    if (arr.length < 2) return;
+    ctx.beginPath();
+    arr.forEach((v, i) => {
+      const x = (i / (arr.length - 1)) * W;
+      const y = H - ((v - VM_MIN) / range) * H;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.globalAlpha = 0.8;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+  });
+
+  // Resting potential label
+  const restY = H - ((-70 - VM_MIN) / range) * H;
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.setLineDash([2, 5]);
+  ctx.beginPath(); ctx.moveTo(0, restY); ctx.lineTo(W, restY); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/* ─────────────────────────────────────────────
+   3-D Drosophila MaleCNS Biological Brain & Connectome
+   MaleCNS v1.0 (HHMI Janelia / Cambridge / Google Research)
+───────────────────────────────────────────── */
+let threeScene, threeCamera, threeRenderer;
+let atlasPointsMesh, instancedMesh, synapseLines, haloPoints, brainShellMesh;
+let currentView = 'biological';
+let currentRegionFilter = 'all';
+let showTracts = false; // By default NO random lines: pure genuine fruit fly brain anatomy!
+let isDragging = false, prevMouseX = 0, prevMouseY = 0;
+let camPhi = 0.08, camTheta = 0.0, camRadius = 5.8;
+let circuitAtlasIndices = new Int32Array(N_NEURONS);
+let atlasPointsMaterial = null;
+let brainCenter = new THREE.Vector3(0, 0, 0);
+
+const dummy = new THREE.Object3D();
+let activeCoords = new Float32Array(N_NEURONS * 3);  // agent somas embedded in Central Brain
+let neuronRegions = new Uint8Array(N_NEURONS);       // 0: AL, 1: KC, 2: CX, 3: DAN, 4: MBON
+const synapticPairs = [];                              // Bundled anatomical fascicles
+
+// 1024-LIF Region colors
+const REGION_COLORS = [
+  new THREE.Color(0x00f0ff), // AL: Radiant Electric Cyan
+  new THREE.Color(0xa855f7), // KC: Vivid Deep Orchid
+  new THREE.Color(0xf59e0b), // CX: Brilliant Amber Gold
+  new THREE.Color(0xff2a6d), // DAN: High-Intensity Crimson
+  new THREE.Color(0x10b981), // MBON: Neon Emerald
+];
+
+const REGION_NAMES = ['AL', 'KC', 'CX', 'DAN', 'MBON'];
+const REGION_HEX   = ['#00f0ff', '#a855f7', '#f59e0b', '#ff2a6d', '#10b981'];
+
+// MaleCNS Real Anatomical Groups:
+// Group 0: Optic lobes (90,807 neurons, #81b5c8 - crystalline cyan/blue)
+// Group 1: Central brain (32,170 neurons, #cfcac0 - luminous ivory/pearl)
+// Group 2: Descending neurons (1,312 neurons, #dfb672 - amber gold)
+const MALECNS_GROUP_COLORS = [
+  new THREE.Color(0x76b5d4), // Optic: Soft crystalline cyan/blue
+  new THREE.Color(0xdad5cb), // Central brain: Luminous pearl/ivory
+  new THREE.Color(0xe0b468), // Descending: Rich amber gold
+];
+
+let maleCnsPositions = null; // Float32Array of all 124,289 brain somata
+let maleCnsGroups = null;    // Uint8Array of group IDs (0: optic, 1: central, 2: descending)
+let maleCnsCount = 0;
+
+/* ── Asynchronously Load Genuine MaleCNS v1.0 Brain Atlas ── */
+async function loadMaleCnsAtlas() {
+  try {
+    const [posBuf, grpBuf] = await Promise.all([
+      fetch('/data/brain-atlas/positions.bin').then(r => {
+        if (!r.ok) throw new Error('Cannot load positions.bin');
+        return r.arrayBuffer();
+      }),
+      fetch('/data/brain-atlas/groups.bin').then(r => {
+        if (!r.ok) throw new Error('Cannot load groups.bin');
+        return r.arrayBuffer();
+      })
+    ]);
+
+    const rawPos = new Float32Array(posBuf);
+    // groups.bin is uint8 (1 byte per entry, 140,024 somata)
+    const rawGrp = new Uint8Array(grpBuf);
+    const nTotal = rawGrp.length;
+
+    // Filter to brain-only somata (groups 0: optic, 1: central, 2: descending, omitting VNC/other)
+    const validIndices = [];
+    for (let i = 0; i < nTotal; i++) {
+      if (rawGrp[i] < 3) validIndices.push(i);
+    }
+
+    maleCnsCount = validIndices.length;
+    maleCnsPositions = new Float32Array(maleCnsCount * 3);
+    maleCnsGroups = new Uint8Array(maleCnsCount);
+
+    // 1. Transform raw coordinates to native Drosophila orientation (x, -y, -z)
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let k = 0; k < maleCnsCount; k++) {
+      const origIdx = validIndices[k];
+      const tx =  rawPos[origIdx * 3 + 0];
+      const ty = -rawPos[origIdx * 3 + 1];
+      const tz = -rawPos[origIdx * 3 + 2];
+
+      maleCnsPositions[k * 3 + 0] = tx;
+      maleCnsPositions[k * 3 + 1] = ty;
+      maleCnsPositions[k * 3 + 2] = tz;
+      maleCnsGroups[k] = rawGrp[origIdx];
+
+      if (tx < minX) minX = tx; if (tx > maxX) maxX = tx;
+      if (ty < minY) minY = ty; if (ty > maxY) maxY = ty;
+      if (tz < minZ) minZ = tz; if (tz > maxZ) maxZ = tz;
+    }
+
+    // 2. Uniform scaling & center precisely at origin (0, 0, 0)
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const maxExtent = Math.max(maxX - minX, maxY - minY, maxZ - minZ) || 1;
+    const scale = 5.0 / maxExtent;
+
+    for (let k = 0; k < maleCnsCount; k++) {
+      maleCnsPositions[k * 3 + 0] = (maleCnsPositions[k * 3 + 0] - cx) * scale;
+      maleCnsPositions[k * 3 + 1] = (maleCnsPositions[k * 3 + 1] - cy) * scale;
+      maleCnsPositions[k * 3 + 2] = (maleCnsPositions[k * 3 + 2] - cz) * scale;
+    }
+
+    brainCenter.set(0, 0, 0);
+    buildMaleCnsPointsMesh();
+    console.log(`MaleCNS v1.0 biological brain loaded successfully: ${maleCnsCount.toLocaleString()} measured somata.`);
+  } catch (err) {
+    console.warn('Could not load MaleCNS binary atlas, using procedural anatomical fallback:', err);
+  }
+}
+
+/* ── Build 124,289 Biological MaleCNS Somata Points Cloud ── */
+function buildMaleCnsPointsMesh() {
+  if (!threeScene || !maleCnsPositions) return;
+
+  if (atlasPointsMesh) {
+    threeScene.remove(atlasPointsMesh);
+    atlasPointsMesh.geometry.dispose();
+    atlasPointsMesh.material.dispose();
+  }
+  if (brainShellMesh) {
+    threeScene.remove(brainShellMesh);
+    brainShellMesh.geometry.dispose();
+    brainShellMesh.material.dispose();
+    brainShellMesh = null;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(maleCnsPositions, 3));
+
+  const colors = new Float32Array(maleCnsCount * 3);
+  const groupsAttr = new Float32Array(maleCnsCount);
+  const activityAttr = new Float32Array(maleCnsCount);
+
+  for (let i = 0; i < maleCnsCount; i++) {
+    const grp = maleCnsGroups[i];
+    groupsAttr[i] = grp;
+    const col = MALECNS_GROUP_COLORS[grp] || MALECNS_GROUP_COLORS[1];
+    colors[i * 3 + 0] = col.r;
+    colors[i * 3 + 1] = col.g;
+    colors[i * 3 + 2] = col.b;
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('group', new THREE.BufferAttribute(groupsAttr, 1));
+  geometry.setAttribute('activity', new THREE.BufferAttribute(activityAttr, 1));
+
+  atlasPointsMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      uFilterGroup: { value: -1.0 }
+    },
+    vertexShader: `
+      attribute vec3 color;
+      attribute float group;
+      attribute float activity;
+      varying vec3 vColor;
+      varying float vActivity;
+      varying float vGroup;
+      uniform float uPixelRatio;
+      uniform float uFilterGroup;
+
+      void main() {
+        vColor = color;
+        vActivity = activity;
+        vGroup = group;
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPos;
+
+        float ptSize = (1.1 + activity * 2.5) * uPixelRatio;
+        if (uFilterGroup >= 0.0 && uFilterGroup <= 2.0) {
+          if (abs(group - uFilterGroup) > 0.1) {
+            ptSize *= 0.6;
+          } else {
+            ptSize *= 1.35;
+          }
+        }
+        gl_PointSize = ptSize;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vActivity;
+      varying float vGroup;
+      uniform float uFilterGroup;
+
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float r = length(uv);
+        if (r > 0.5) discard;
+        float disc = 1.0 - smoothstep(0.18, 0.5, r);
+
+        vec3 col = vColor;
+        float alpha = 0.44 * disc;
+
+        if (uFilterGroup >= 0.0 && uFilterGroup <= 2.0) {
+          if (abs(vGroup - uFilterGroup) > 0.1) {
+            alpha *= 0.12;
+          } else {
+            alpha = min(1.0, alpha * 2.2);
+          }
+        }
+
+        if (vActivity > 0.02) {
+          vec3 flare = mix(vec3(0.0, 0.95, 1.0), vec3(1.0, 1.0, 1.0), smoothstep(0.4, 1.0, vActivity));
+          col = mix(col, flare, vActivity);
+          alpha = max(alpha, (0.45 + 0.55 * vActivity) * disc);
+        }
+
+        gl_FragColor = vec4(col, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending
+  });
+
+  atlasPointsMesh = new THREE.Points(geometry, atlasPointsMaterial);
+  threeScene.add(atlasPointsMesh);
+}
+
+/* ── Generate Anatomical Coordinates for 1024-LIF Somas in Central Brain ── */
+function generateEmbeddedAgentPositions() {
+  const useAtlas = maleCnsPositions && maleCnsCount > 0;
+  const rng = (seed) => {
+    let s = seed % 2147483647;
+    return () => {
+      s = (s * 16807) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+  };
+  const rand = rng(711923);
+
+  if (useAtlas) {
+    const centralSomata = [];
+    for (let k = 0; k < maleCnsCount; k++) {
+      if (maleCnsGroups[k] === 1) centralSomata.push(k);
+    }
+
+    const nCentral = centralSomata.length;
+    // Map the 5 functional regions to Central Brain somata:
+    // AL (128), KC (640), CX (128), DAN (64), MBON (64)
+    const alIndices   = centralSomata.slice(0, 128);
+    const kcIndices   = centralSomata.slice(128, 128 + 640);
+    const cxIndices   = centralSomata.slice(768, 768 + 128);
+    const danIndices  = centralSomata.slice(896, 896 + 64);
+    const mbonIndices = centralSomata.slice(960, 960 + 64);
+    const ordered = alIndices.concat(kcIndices, cxIndices, danIndices, mbonIndices);
+
+    for (let i = 0; i < N_NEURONS && i < ordered.length; i++) {
+      const idx = ordered[i];
+      circuitAtlasIndices[i] = idx;
+      activeCoords[i * 3 + 0] = maleCnsPositions[idx * 3 + 0];
+      activeCoords[i * 3 + 1] = maleCnsPositions[idx * 3 + 1];
+      activeCoords[i * 3 + 2] = maleCnsPositions[idx * 3 + 2];
+
+      if      (i < 128) neuronRegions[i] = 0; // AL
+      else if (i < 768) neuronRegions[i] = 1; // KC
+      else if (i < 896) neuronRegions[i] = 2; // CX
+      else if (i < 960) neuronRegions[i] = 3; // DAN
+      else              neuronRegions[i] = 4; // MBON
+    }
+  } else {
+    for (let i = 0; i < N_NEURONS; i++) {
+      activeCoords[i * 3 + 0] = (rand() - 0.5) * 4.0;
+      activeCoords[i * 3 + 1] = (rand() - 0.5) * 2.0;
+      activeCoords[i * 3 + 2] = (rand() - 0.5) * 1.5;
+      neuronRegions[i] = (i < 128) ? 0 : (i < 768) ? 1 : (i < 896) ? 2 : (i < 960) ? 3 : 4;
+    }
+  }
+}
+
+/* ── Generate Soft Radial Point Glow Sprite ── */
+function createGlowSpriteTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gradient.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  gradient.addColorStop(0.25, 'rgba(255, 255, 255, 0.7)');
+  gradient.addColorStop(0.55, 'rgba(180, 220, 255, 0.25)');
+  gradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/* ── Initialize Three.js Scene ── */
+async function initThree() {
+  const wrap = $('brain-canvas-wrap');
+  if (!wrap) return;
+
+  const W = Math.max(wrap.clientWidth, 320);
+  const H = Math.max(wrap.clientHeight, 330);
+
+  threeScene = new THREE.Scene();
+  threeCamera = new THREE.PerspectiveCamera(46, W / H, 0.1, 500);
+  updateCamera();
+
+  threeRenderer = new THREE.WebGLRenderer({
+    canvas: $('brain-canvas'),
+    antialias: true,
+    alpha: true,
+    powerPreference: 'high-performance'
+  });
+  threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  threeRenderer.setSize(W, H);
+
+  threeScene.add(new THREE.AmbientLight(0x162438, 1.8));
+
+  const p1 = new THREE.PointLight(0x00f0ff, 2.5, 140);
+  p1.position.set(28, 30, 35);
+  threeScene.add(p1);
+
+  const p2 = new THREE.PointLight(0xa855f7, 2.2, 140);
+  p2.position.set(-28, -20, 28);
+  threeScene.add(p2);
+
+  await loadMaleCnsAtlas();
+  generateEmbeddedAgentPositions();
+  buildAgentSomas();
+  threeRenderer.setAnimationLoop(threeAnimate);
+  setupOrbitControls(wrap);
+}
+
+/* ── Build 1024 Spiking Decision Somas (Glowing Neural Dots) ── */
+function buildAgentSomas() {
+  if (instancedMesh) {
+    threeScene.remove(instancedMesh);
+    if (instancedMesh.geometry) instancedMesh.geometry.dispose();
+    if (instancedMesh.material) instancedMesh.material.dispose();
+    instancedMesh = null;
+  }
+  if (haloPoints) {
+    threeScene.remove(haloPoints);
+    if (haloPoints.geometry) haloPoints.geometry.dispose();
+    if (haloPoints.material) haloPoints.material.dispose();
+    haloPoints = null;
+  }
+
+  // Pure pinpoint glowing neural dots (no bulky 3D balls)
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(activeCoords, 3));
+
+  const colors = new Float32Array(N_NEURONS * 3);
+  const sizes = new Float32Array(N_NEURONS);
+  const alphas = new Float32Array(N_NEURONS);
+
+  for (let i = 0; i < N_NEURONS; i++) {
+    const reg = neuronRegions[i];
+    const baseCol = REGION_COLORS[reg] || REGION_COLORS[0];
+    colors[i * 3 + 0] = baseCol.r;
+    colors[i * 3 + 1] = baseCol.g;
+    colors[i * 3 + 2] = baseCol.b;
+    sizes[i] = 1.6;   // resting pinpoint dot
+    alphas[i] = 0.22; // resting dim opacity
+  }
+
+  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geom.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+  geom.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+    },
+    vertexShader: `
+      attribute vec3 color;
+      attribute float size;
+      attribute float alpha;
+      varying vec3 vColor;
+      varying float vAlpha;
+      uniform float uPixelRatio;
+
+      void main() {
+        vColor = color;
+        vAlpha = alpha;
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPos;
+        gl_PointSize = size * uPixelRatio * (8.0 / -mvPos.z);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float r = length(uv);
+        if (r > 0.5) discard;
+        float core = 1.0 - smoothstep(0.0, 0.38, r);
+        float halo = 1.0 - smoothstep(0.15, 0.5, r);
+        vec3 col = mix(vColor, vec3(1.0, 1.0, 1.0), core * 0.45);
+        float a = vAlpha * (core * 0.75 + halo * 0.25);
+        gl_FragColor = vec4(col, a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+
+  instancedMesh = new THREE.Points(geom, mat);
+  threeScene.add(instancedMesh);
+
+  if (showTracts) buildSynapticLines();
+}
+
+/* ── Build Bundled Neuropil Fascicles ── */
+function buildSynapticLines() {
+  if (synapseLines) {
+    threeScene.remove(synapseLines);
+    synapseLines.geometry.dispose();
+    synapseLines.material.dispose();
+    synapseLines = null;
+  }
+
+  if (!showTracts) return;
+
+  const nPairs = synapticPairs.length;
+  const linePositions = new Float32Array(nPairs * 6);
+  const lineColors    = new Float32Array(nPairs * 6);
+
+  for (let p = 0; p < nPairs; p++) {
+    const [src, tgt] = synapticPairs[p];
+    const off = p * 6;
+
+    linePositions[off + 0] = activeCoords[src * 3 + 0];
+    linePositions[off + 1] = activeCoords[src * 3 + 1];
+    linePositions[off + 2] = activeCoords[src * 3 + 2];
+
+    linePositions[off + 3] = activeCoords[tgt * 3 + 0];
+    linePositions[off + 4] = activeCoords[tgt * 3 + 1];
+    linePositions[off + 5] = activeCoords[tgt * 3 + 2];
+
+    const srcCol = REGION_COLORS[neuronRegions[src]];
+    const tgtCol = REGION_COLORS[neuronRegions[tgt]];
+
+    lineColors[off + 0] = srcCol.r;
+    lineColors[off + 1] = srcCol.g;
+    lineColors[off + 2] = srcCol.b;
+
+    lineColors[off + 3] = tgtCol.r;
+    lineColors[off + 4] = tgtCol.g;
+    lineColors[off + 5] = tgtCol.b;
+  }
+
+  const lineGeom = new THREE.BufferGeometry();
+  lineGeom.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+  lineGeom.setAttribute('color', new THREE.BufferAttribute(lineColors, 3));
+
+  const lineMat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+
+  synapseLines = new THREE.LineSegments(lineGeom, lineMat);
+  threeScene.add(synapseLines);
+}
+
+/* ── Live Neural Activity Update Loop ── */
+function updateBrainViz(spikes, dopamine) {
+  if (!activeCoords) return;
+
+  const palette = $('colour-mode')?.value || 'anatomical';
+
+  // 1. Update genuine 124,289 Drosophila somata activity
+  if (atlasPointsMesh && atlasPointsMesh.geometry) {
+    const actAttr = atlasPointsMesh.geometry.getAttribute('activity');
+    if (actAttr) {
+      const actArr = actAttr.array;
+      for (let k = 0; k < actArr.length; k++) {
+        actArr[k] *= 0.88;
+      }
+      if (circuitAtlasIndices && circuitAtlasIndices.length > 0) {
+        for (let i = 0; i < N_NEURONS; i++) {
+          const somaIdx = circuitAtlasIndices[i];
+          if (somaIdx >= 0 && somaIdx < actArr.length) {
+            if (spikeData1024 && spikeData1024[i] > 0) {
+              actArr[somaIdx] = 1.0;
+            }
+            if (neuronRegions[i] === 3 && Math.abs(dopamine) > 0.02) {
+              actArr[somaIdx] = Math.min(1.0, actArr[somaIdx] + Math.abs(dopamine) * 1.8);
+            }
+          }
+        }
+      }
+      actAttr.needsUpdate = true;
+    }
+
+    if (atlasPointsMaterial && atlasPointsMaterial.uniforms) {
+      let filterVal = -1.0;
+      if (currentRegionFilter === 'optic') filterVal = 0.0;
+      else if (currentRegionFilter === 'central') filterVal = 1.0;
+      else if (currentRegionFilter === 'descending') filterVal = 2.0;
+      else if (currentRegionFilter === 'agent') filterVal = 3.0;
+      if (atlasPointsMaterial.uniforms.uFilterGroup) {
+        atlasPointsMaterial.uniforms.uFilterGroup.value = filterVal;
+      }
+    }
+  }
+
+  // 2. Update circuit somas dots (sharp pinpoint dots that flare up when firing)
+  if (instancedMesh && instancedMesh.geometry) {
+    const colAttr = instancedMesh.geometry.getAttribute('color');
+    const sizeAttr = instancedMesh.geometry.getAttribute('size');
+    const alphaAttr = instancedMesh.geometry.getAttribute('alpha');
+
+    if (colAttr && sizeAttr && alphaAttr) {
+      const colArr = colAttr.array;
+      const sizeArr = sizeAttr.array;
+      const alphaArr = alphaAttr.array;
+
+      for (let i = 0; i < N_NEURONS; i++) {
+        const isSpike = spikeData1024 && spikeData1024[i] > 0;
+        const reg = neuronRegions[i];
+        const baseCol = REGION_COLORS[reg] || REGION_COLORS[0];
+
+        if (isSpike) {
+          // Firing: bright glowing pinpoint dot!
+          sizeArr[i] = 4.2;
+          alphaArr[i] = 1.0;
+          colArr[i * 3 + 0] = Math.min(1.0, baseCol.r * 0.4 + 0.7);
+          colArr[i * 3 + 1] = Math.min(1.0, baseCol.g * 0.4 + 0.7);
+          colArr[i * 3 + 2] = Math.min(1.0, baseCol.b * 0.4 + 0.7);
+        } else if (reg === 3 && Math.abs(dopamine) > 0.03) {
+          // DAN dopaminergic flare
+          sizeArr[i] = 4.8;
+          alphaArr[i] = 0.95;
+          if (dopamine > 0) {
+            colArr[i * 3 + 0] = 0.1; colArr[i * 3 + 1] = 1.0; colArr[i * 3 + 2] = 0.5;
+          } else {
+            colArr[i * 3 + 0] = 1.0; colArr[i * 3 + 1] = 0.2; colArr[i * 3 + 2] = 0.3;
+          }
+        } else {
+          // Resting: tiny subtle dot
+          sizeArr[i] = 1.6;
+          alphaArr[i] = 0.22;
+          colArr[i * 3 + 0] = baseCol.r;
+          colArr[i * 3 + 1] = baseCol.g;
+          colArr[i * 3 + 2] = baseCol.b;
+        }
+      }
+
+      colAttr.needsUpdate = true;
+      sizeAttr.needsUpdate = true;
+      alphaAttr.needsUpdate = true;
+    }
+  }
+}
+
+/* ── Camera & Controls ── */
+function updateCamera() {
+  const x = camRadius * Math.sin(camTheta) * Math.cos(camPhi);
+  const y = camRadius * Math.sin(camPhi);
+  const z = camRadius * Math.cos(camTheta) * Math.cos(camPhi);
+  threeCamera.position.set(x, y, z);
+  threeCamera.lookAt(0, 0, 0);
+}
+
+function setupOrbitControls(wrap) {
+  wrap.addEventListener('mousedown', e => {
+    isDragging = true;
+    prevMouseX = e.clientX;
+    prevMouseY = e.clientY;
+  });
+
+  window.addEventListener('mouseup', () => isDragging = false);
+
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const dx = e.clientX - prevMouseX;
+    const dy = e.clientY - prevMouseY;
+    camTheta -= dx * 0.006;
+    camPhi   = Math.max(-Math.PI * 0.44, Math.min(Math.PI * 0.44, camPhi + dy * 0.006));
+    prevMouseX = e.clientX;
+    prevMouseY = e.clientY;
+    updateCamera();
+  });
+
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    camRadius = Math.max(2.5, Math.min(16.0, camRadius + e.deltaY * 0.005));
+    updateCamera();
+  }, { passive: false });
+
+  $('recenter-cam-btn')?.addEventListener('click', () => {
+    camPhi = 0.08; camTheta = 0.0; camRadius = 5.8;
+    updateCamera();
+  });
+
+  $('toggle-tracts-btn')?.addEventListener('click', () => {
+    showTracts = !showTracts;
+    const btn = $('toggle-tracts-btn');
+    if (btn) btn.textContent = showTracts ? '⚡ Tracts: ON' : '⚡ Tracts: OFF';
+    buildSynapticLines();
+  });
+}
+
+function threeAnimate() {
+  if (brainNeedsUpdate) {
+    updateBrainViz(spikeData1024, currentDopamine);
+    brainNeedsUpdate = false;
+  }
+  if (!isDragging && threeScene) {
+    camTheta += 0.0008;
+    updateCamera();
+  }
+  threeRenderer.render(threeScene, threeCamera);
+}
+
+/* ─────────────────────────────────────────────
+   2-D Charts (Portfolio & Reward)
+───────────────────────────────────────────── */
+function drawPortfolioChart() {
+  const canvas = $('port-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, W, H);
+  if (portfolioHistory.length < 2) return;
+
+  const data = portfolioHistory;
+  const minP = Math.min(...data) * 0.995;
+  const maxP = Math.max(...data) * 1.005;
+  const range = maxP - minP || 1;
+
+  const getX = i => (i / (data.length - 1)) * W;
+  const getY = v => H - ((v - minP) / range) * (H - 24) - 12;
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let s = 1; s <= 3; s++) {
+    const gy = (H / 4) * s;
+    ctx.beginPath();
+    ctx.moveTo(0, gy);
+    ctx.lineTo(W, gy);
+    ctx.stroke();
+  }
+
+  // Gradient fill under Fly Trader
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  const lastVal = data[data.length - 1];
+  const isProfit = lastVal >= data[0];
+  grad.addColorStop(0, isProfit ? 'rgba(34, 197, 94, 0.35)' : 'rgba(239, 68, 68, 0.3)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.0)');
+
+  ctx.beginPath();
+  ctx.moveTo(getX(0), getY(data[0]));
+  for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
+  ctx.lineTo(W, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Fly Trader Line
+  ctx.beginPath();
+  ctx.moveTo(getX(0), getY(data[0]));
+  for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
+  ctx.strokeStyle = isProfit ? '#22c55e' : '#ef4444';
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+
+  // Buy & Hold baseline line
+  const bh = data[0];
+  ctx.beginPath();
+  ctx.setLineDash([4, 4]);
+  ctx.moveTo(0, getY(bh));
+  ctx.lineTo(W, getY(bh));
+  ctx.strokeStyle = '#f59e0b';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Current value label
+  const cY = getY(lastVal);
+  ctx.fillStyle = isProfit ? '#22c55e' : '#ef4444';
+  ctx.font = `500 10px 'JetBrains Mono', monospace`;
+  ctx.fillText(`$${lastVal.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, W - 90, Math.max(14, Math.min(H - 4, cY - 4)));
+}
+
+function drawRewardChart() {
+  _drawRewardOnCanvas($('reward-canvas'));
+  _drawRewardOnCanvas($('reward-canvas-big'));
+  _drawRewardOnCanvas($('reward-canvas-ctrl'));
+}
+
+function drawRewardChartBig() {
+  _drawRewardOnCanvas($('reward-canvas-big'));
+}
+
+function _drawRewardOnCanvas(canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  if (W < 2 || H < 2) return;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, W, H);
+  if (rewardHistory.length < 2) return;
+
+  const data = rewardHistory;
+  const maxAbs = Math.max(...data.map(Math.abs), 0.005);
+
+  const getX = i => (i / (data.length - 1)) * W;
+  const getY = v => H / 2 - (v / maxAbs) * (H / 2 - 6);
+
+  // Zero axis
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, H / 2);
+  ctx.lineTo(W, H / 2);
+  ctx.stroke();
+
+  // Positive fill
+  const posGrad = ctx.createLinearGradient(0, 0, 0, H / 2);
+  posGrad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
+  posGrad.addColorStop(1, 'rgba(34, 211, 238, 0.0)');
+  ctx.beginPath();
+  ctx.moveTo(getX(0), H / 2);
+  data.forEach((v, i) => { ctx.lineTo(getX(i), getY(Math.max(0, v))); });
+  ctx.lineTo(W, H / 2);
+  ctx.fillStyle = posGrad;
+  ctx.fill();
+
+  // Reward sparkline
+  ctx.beginPath();
+  ctx.moveTo(getX(0), getY(data[0]));
+  for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
+  ctx.strokeStyle = '#22d3ee';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+}
+
+function drawHeatmap(spikes) {
+  const canvas = $('heatmap-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw a 32×32 heatmap: region-colored with spike glow
+  // Limited to 1024 neurons to match 32×32 grid
+  const maxN = Math.min(N_NEURONS, 1024);
+  const cellW = W / 32;
+  const cellH = H / 32;
+
+  for (let i = 0; i < maxN; i++) {
+    const row = Math.floor(i / 32);
+    const col = i % 32;
+    const isSpike = spikes[i] > 0;
+    const reg = neuronRegions[i];
+    const hex = REGION_HEX[reg];
+
+    const x = col * cellW;
+    const y = row * cellH;
+
+    if (isSpike) {
+      // Glow effect for spiking neurons
+      const grd = ctx.createRadialGradient(x + cellW/2, y + cellH/2, 0, x + cellW/2, y + cellH/2, cellW * 1.2);
+      grd.addColorStop(0, hex + 'ff');
+      grd.addColorStop(0.5, hex + '88');
+      grd.addColorStop(1, hex + '00');
+      ctx.fillStyle = grd;
+      ctx.fillRect(Math.max(0, x - cellW * 0.2), Math.max(0, y - cellH * 0.2), cellW * 1.4, cellH * 1.4);
+    } else {
+      ctx.fillStyle = hex + '2a';
+      ctx.fillRect(x, y, cellW, cellH);
+    }
+  }
+
+  // Region boundary lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 0.5;
+  // AL: 0-127 (rows 0-3), KC: 128-767 (rows 4-23), CX: 768-895 (rows 24-27), DAN: 896-959 (rows 28-29), MBON: 960-1023 (rows 30-31)
+  [4, 24, 28, 30].forEach(row => {
+    ctx.beginPath();
+    ctx.moveTo(0, row * cellH);
+    ctx.lineTo(W, row * cellH);
+    ctx.stroke();
+  });
+
+  // Region labels on side
+  ctx.font = `bold 7px 'JetBrains Mono', monospace`;
+  const regionLabels = [
+    { label: 'AL', startRow: 0, color: REGION_HEX[0] },
+    { label: 'KC', startRow: 4, color: REGION_HEX[1] },
+    { label: 'CX', startRow: 24, color: REGION_HEX[2] },
+    { label: 'DAN', startRow: 28, color: REGION_HEX[3] },
+    { label: 'MBON', startRow: 30, color: REGION_HEX[4] },
+  ];
+  regionLabels.forEach(({ label, startRow, color }) => {
+    ctx.fillStyle = color + 'cc';
+    ctx.fillText(label, 2, startRow * cellH + 8);
+  });
+}
+
+/* ─────────────────────────────────────────────
+   Activity Bars — Rich per-region display
+───────────────────────────────────────────── */
+function getRegionBoundaries() {
+  // Proportional anatomical partitions scaled to N_NEURONS
+  // Default 1024: AL=128, KC=640, CX=128, DAN=64, MBON=64
+  if (N_NEURONS === 1024) return [128, 768, 896, 960, 1024];
+  const scale = N_NEURONS / 1024;
+  return [
+    Math.round(128 * scale),   // AL
+    Math.round(768 * scale),   // KC
+    Math.round(896 * scale),   // CX
+    Math.round(960 * scale),   // DAN
+    N_NEURONS                  // MBON (remainder)
+  ];
+}
+
+function getRegionSizes() {
+  const b = getRegionBoundaries();
+  return [b[0], b[1] - b[0], b[2] - b[1], b[3] - b[2], b[4] - b[3]];
+}
+
+function updateActivityBars(spikes, regions) {
+  qActivityBars.innerHTML = '';
+
+  // Count spikes per region
+  const regionCounts = [0, 0, 0, 0, 0];
+  const regionSizes  = getRegionSizes();
+  for (let i = 0; i < N_NEURONS; i++) {
+    if (spikes[i] > 0) regionCounts[neuronRegions[i]]++;
+  }
+
+  const totalSpikes = regionCounts.reduce((a, b) => a + b, 0);
+
+  if (totalSpikes === 0) {
+    qActivityBars.innerHTML = `<span class="no-spike-msg">Awaiting spike bursts…<br><small>Start Auto-Pilot to begin</small></span>`;
+    return;
+  }
+
+  // One bar per region
+  regionCounts.forEach((count, reg) => {
+    if (count === 0) return;
+    const pct = Math.round(count / regionSizes[reg] * 100);
+    const color = REGION_HEX[reg];
+    const name = ['Antennal Lobe', 'Kenyon Cells', 'Central Complex', 'DAN (Dopamine)', 'MBON (Valence)'][reg];
+    const div = document.createElement('div');
+    div.className = 'a-row';
+    div.innerHTML = `
+      <span class="a-label" style="color:${color}">${REGION_NAMES[reg]}</span>
+      <div class="a-bar-wrap">
+        <div class="a-bar" style="width:${Math.min(100, pct * 2.5)}%; background:${color}55; border-right: 2px solid ${color}"></div>
+      </div>
+      <span class="a-val">${count}<span style="color:var(--txt-dim);font-size:0.62rem"> / ${regionSizes[reg]}</span></span>
+    `;
+    div.title = `${name}: ${count} of ${regionSizes[reg]} neurons firing (${pct}%)`;
+    qActivityBars.appendChild(div);
+  });
+
+  // Summary
+  const summaryDiv = document.createElement('div');
+  summaryDiv.className = 'a-summary';
+  summaryDiv.innerHTML = `<span class="a-total">${totalSpikes} <span style="color:var(--txt-dim)">/ ${N_NEURONS} neurons active</span></span>`;
+  qActivityBars.appendChild(summaryDiv);
+}
+
+// Update all elements that display neuron count
+function updateNeuronCountDisplay() {
+  // Update elements that use data-neuron-count attribute
+  document.querySelectorAll('[data-neuron-count]').forEach(el => {
+    const originalText = el.textContent || el.innerText;
+    // Replace 1024 with current N_NEURONS in the text
+    const newText = originalText.replace(/1024/g, N_NEURONS.toString());
+    if (el.textContent !== undefined) {
+      el.textContent = newText;
+    } else {
+      el.innerText = newText;
+    }
+  });
+  
+  // Update brain badge to include N_NEURONS
+  if (qBrainBadge) {
+    qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes} · ${N_NEURONS}-LIF Neurons`;
+  }
+  
+  // Update activity bars summary if it exists
+  const activitySummary = qActivityBars.querySelector('.a-summary');
+  if (activitySummary) {
+    const totalSpikes = spikeData.filter(v => v > 0).length;
+    activitySummary.innerHTML = `<span class="a-total">${totalSpikes} <span style="color:var(--txt-dim)">/ ${N_NEURONS} neurons active</span></span>`;
+  }
+}
+
+/* ─────────────────────────────────────────────
+   Evolution Lab Modal
+───────────────────────────────────────────── */
+function openLabModal(data) {
+  const modal = $('evolution-modal');
+  if (!modal) return;
+  modal.classList.add('open');
+
+  if (data) populateLab(data);
+}
+
+function closeLabModal() {
+  const modal = $('evolution-modal');
+  if (modal) modal.classList.remove('open');
+}
+
+function populateLab(d) {
+  // KPI cards
+  const avgRet = d.avg_return_pct || 0;
+  const bestRet = d.best_return_pct || 0;
+  const p = d.plasticity || {};
+  const ve = d.valence_evolution || {};
+
+  const labAvgRet = $('lab-avg-ret');
+  if (labAvgRet) {
+    labAvgRet.textContent = `${avgRet >= 0 ? '+' : ''}${avgRet.toFixed(2)}%`;
+    labAvgRet.className = `kpi-value ${avgRet >= 0 ? 'pos' : 'neg'}`;
+  }
+  const labBestRet = $('lab-best-ret');
+  if (labBestRet) labBestRet.textContent = `Best: ${bestRet >= 0 ? '+' : ''}${bestRet.toFixed(2)}%`;
+
+  const labLtp = $('lab-ltp-ltd');
+  if (labLtp) labLtp.textContent = `${p.ltp_count || 0} LTP / ${p.ltd_count || 0} LTD`;
+
+  const labLoss = $('lab-loss');
+  if (labLoss) labLoss.textContent = (d.avg_loss || 0).toFixed(5);
+
+  const labEp = $('lab-total-episodes');
+  if (labEp) labEp.textContent = d.total_episodes || 0;
+
+  // Episode chart
+  if (d.episodes_data && d.episodes_data.length > 0) {
+    drawEvolutionChart(d.episodes_data);
+  }
+
+  // Plasticity grid
+  if (p.deltas && p.deltas.length > 0) {
+    drawPlasticityGrid(p.deltas, p.weights_before, p.weights_after);
+  }
+
+  // Valence comparison
+  if (ve.before && ve.after) {
+    updateValenceComparison(ve.before, ve.after);
+  }
+}
+
+function drawEvolutionChart(episodes) {
+  const canvas = $('evo-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth || 800;
+  const H = canvas.clientHeight || 200;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const n = episodes.length;
+  if (n < 1) return;
+
+  const returns  = episodes.map(e => e.return_pct);
+  const winrates = episodes.map(e => e.win_rate);
+  const losses   = episodes.map(e => e.loss * 100); // scale for display
+
+  const allVals = [...returns, ...winrates, ...losses];
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const rangeV = (maxV - minV) || 1;
+
+  const padL = 10, padR = 10, padT = 14, padB = 20;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
+
+  const gx = (i) => padL + (i / Math.max(1, n - 1)) * cW;
+  const gy = (v) => padT + cH - ((v - minV) / rangeV) * cH;
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (let s = 1; s <= 3; s++) {
+    const y = padT + (cH / 4) * s;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+  }
+
+  // Zero line
+  const zeroY = gy(0);
+  if (zeroY >= padT && zeroY <= padT + cH) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(padL, zeroY); ctx.lineTo(W - padR, zeroY); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Draw Return % (green/red)
+  function drawLine(data, color, lineW = 2) {
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = gx(i), y = gy(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineW;
+    ctx.stroke();
+
+    // Dots at each episode
+    data.forEach((v, i) => {
+      ctx.beginPath();
+      ctx.arc(gx(i), gy(v), 3, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    });
+  }
+
+  drawLine(returns, '#22c55e', 2.5);
+  drawLine(winrates, '#8c52ff', 1.8);
+  drawLine(losses, '#ff3366', 1.4);
+
+  // Episode numbers along bottom
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = `9px 'JetBrains Mono', monospace`;
+  for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 10))) {
+    ctx.fillText(`${episodes[i].episode}`, gx(i) - 4, H - 4);
+  }
+}
+
+function drawPlasticityGrid(deltas, weightsBefore, weightsAfter) {
+  const grid = $('plasticity-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  const maxDelta = Math.max(...deltas.map(Math.abs), 0.0001);
+
+  deltas.slice(0, 64).forEach((d, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'p-cell';
+    const intensity = Math.min(1, Math.abs(d) / maxDelta);
+    if (d > 0.0001) {
+      cell.style.background = `rgba(34, 197, 94, ${0.15 + intensity * 0.8})`;
+      cell.title = `Synapse ${i}: +${d.toFixed(4)} (LTP)`;
+    } else if (d < -0.0001) {
+      cell.style.background = `rgba(239, 68, 68, ${0.15 + intensity * 0.8})`;
+      cell.title = `Synapse ${i}: ${d.toFixed(4)} (LTD)`;
+    } else {
+      cell.style.background = `rgba(100, 120, 160, 0.15)`;
+      cell.title = `Synapse ${i}: stable`;
+    }
+    grid.appendChild(cell);
+  });
+}
+
+function updateValenceComparison(before, after) {
+  const actions = ['hold', 'buy', 'sell'];
+  const beforeIds = ['vb-hold', 'vb-buy', 'vb-sell'];
+  const afterIds  = ['va-hold', 'va-buy', 'va-sell'];
+
+  before.forEach((p, i) => {
+    const el = $(beforeIds[i]);
+    if (el) {
+      el.style.width = `${Math.round(p * 100)}%`;
+      const parent = el.parentElement;
+      if (parent) {
+        const span = parent.nextElementSibling;
+        if (span) span.textContent = `${Math.round(p * 100)}%`;
+      }
+    }
+  });
+
+  after.forEach((p, i) => {
+    const el = $(afterIds[i]);
+    if (el) {
+      el.style.width = `${Math.round(p * 100)}%`;
+      const parent = el.parentElement;
+      if (parent) {
+        const span = parent.nextElementSibling;
+        if (span) span.textContent = `${Math.round(p * 100)}%`;
+      }
+    }
+  });
+}
+
+function appendTrade(trade) {
+  // Derive a clean single-word CSS class from the action string
+  const rawCls = trade.action.toLowerCase();
+  const cls = rawCls.startsWith('buy') ? 'buy' : rawCls.startsWith('sell') ? 'sell' : 'hold';
+  const div = document.createElement('div');
+  div.className = `trade-item ${cls}`;
+  div.innerHTML = `
+    <span class="ta ${cls}">${trade.action}</span>
+    <span class="tp">$${trade.price}</span>
+    <span class="tp">→ $${trade.portfolio.toLocaleString('en-US')}</span>
+  `;
+  qTradeLog.prepend(div);
+  // Cap trade log to 30 entries
+  while (qTradeLog.children.length > 30) qTradeLog.removeChild(qTradeLog.lastChild);
+}
+
+function toast(msg, cls) {
+  const el = document.createElement('div');
+  el.className = `toast ${cls}`;
+  el.textContent = msg;
+  $('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+function setStatus(state, text) {
+  qStatus.textContent = text;
+  qDot.className = 'dot ' + (state === 'live' ? 'live' : state === 'error' ? 'error' : '');
+}
+
+/* ─────────────────────────────────────────────
+    Learning History Fetch & Charts
+ ───────────────────────────────────────────── */
+async function fetchLearningHistory() {
+  try {
+    const r = await fetch(`${API}/learning_history`);
+    if (!r.ok) return;
+    const d = await r.json();
+    learningHistory = d.history || [];
+    totalEpisodes = d.total_episodes || 0;
+    const el = $('learn-total-episodes');
+    if (el) el.textContent = totalEpisodes;
+    drawLearningHistoryChart();
+  } catch(e) {
+    console.warn('Learning history fetch failed:', e);
+  }
+}
+
+function drawLearningHistoryChart() {
+  const canvas = $('learn-history-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth || 400;
+  const H = canvas.clientHeight || 160;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const data = learningHistory.slice(-50);
+  const n = data.length;
+  if (n < 2) return;
+
+  const returns  = data.map(e => e.return_pct);
+  const sharpe   = data.map(e => e.sharpe);
+  const winrate  = data.map(e => e.win_rate);
+
+  const allVals = [...returns, ...sharpe, ...winrate];
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const rangeV = (maxV - minV) || 1;
+
+  const padL = 28, padR = 8, padT = 12, padB = 18;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
+
+  const gx = (i) => padL + (i / (n - 1)) * cW;
+  const gy = (v) => padT + cH - ((v - minV) / rangeV) * cH;
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let s = 1; s <= 3; s++) {
+    const y = padT + (cH / 4) * s;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+  }
+
+  // Return % (green)
+  ctx.beginPath();
+  data.forEach((e, i) => {
+    const x = gx(i), y = gy(e.return_pct);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+
+  // Sharpe (cyan)
+  ctx.beginPath();
+  data.forEach((e, i) => {
+    const x = gx(i), y = gy(e.sharpe);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#00e5ff';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  // Win rate (purple)
+  ctx.beginPath();
+  data.forEach((e, i) => {
+    const x = gx(i), y = gy(e.win_rate);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#8c52ff';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Episode numbers
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = `8px 'JetBrains Mono', monospace`;
+  for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) {
+    ctx.fillText(`${data[i].episode}`, gx(i) - 4, H - 4);
+  }
+
+  // Legend
+  ctx.font = `7px 'JetBrains Mono', monospace`;
+  ctx.fillStyle = '#22c55e'; ctx.fillText('Return%', padL, 9);
+  ctx.fillStyle = '#00e5ff'; ctx.fillText('Sharpe', padL + 45, 9);
+  ctx.fillStyle = '#8c52ff'; ctx.fillText('Win%', padL + 85, 9);
+}
+
+/* ─────────────────────────────────────────────
+    Simulation Runs History
+ ───────────────────────────────────────────── */
+let simulationHistory = [];
+
+async function fetchSimulationHistory() {
+  try {
+    const r = await fetch(`${API}/simulation_history`);
+    if (!r.ok) return;
+    const d = await r.json();
+    simulationHistory = d.runs || [];
+    renderSimulationHistoryUI();
+  } catch(e) {
+    console.warn('Simulation history fetch failed:', e);
+  }
+}
+
+async function apiClearSimulationHistory() {
+  try {
+    const r = await fetch(`${API}/simulation_history/clear`, { method: 'POST' });
+    if (r.ok) {
+      toast('Simulation history cleared', 'buy-toast');
+      await fetchSimulationHistory();
+    }
+  } catch(e) {
+    toast('Failed to clear history', 'sell-toast');
+  }
+}
+
+function renderSimulationHistoryUI() {
+  const badge = $('sim-tab-badge');
+  if (badge) badge.textContent = simulationHistory.length;
+
+  // Aggregate KPIs
+  const totalRuns = simulationHistory.length;
+  const totalEps = simulationHistory.reduce((sum, r) => sum + (r.episodes || 0), 0);
+  const returns = simulationHistory.map(r => r.avg_return_pct).filter(v => v !== undefined && !isNaN(v));
+  const bestReturns = simulationHistory.map(r => r.best_return_pct).filter(v => v !== undefined && !isNaN(v));
+
+  const allTimeBest = bestReturns.length > 0 ? Math.max(...bestReturns) : 0;
+  const avgReturn = returns.length > 0 ? (returns.reduce((a, b) => a + b, 0) / returns.length) : 0;
+
+  const aggRuns = $('sim-agg-runs');
+  if (aggRuns) aggRuns.textContent = totalRuns;
+  const aggEps = $('sim-agg-episodes');
+  if (aggEps) aggEps.textContent = totalEps;
+  const aggBest = $('sim-agg-best');
+  if (aggBest) {
+    aggBest.textContent = `${allTimeBest >= 0 ? '+' : ''}${allTimeBest.toFixed(1)}%`;
+    aggBest.className = `sim-kpi-val ${allTimeBest >= 0 ? 'pos' : 'neg'}`;
+  }
+  const aggAvg = $('sim-agg-avg');
+  if (aggAvg) {
+    aggAvg.textContent = `${avgReturn >= 0 ? '+' : ''}${avgReturn.toFixed(1)}%`;
+    aggAvg.className = `sim-kpi-val ${avgReturn >= 0 ? 'pos' : 'neg'}`;
+  }
+
+  // Render Full Run List in #tab-sims
+  const listEl = $('sim-runs-list');
+  if (listEl) {
+    if (simulationHistory.length === 0) {
+      listEl.innerHTML = `
+        <div class="sim-empty-state">
+          <span style="font-size:1.6rem;opacity:.6">🧪</span>
+          <p>No simulations run yet.</p>
+          <p class="sim-empty-sub">Click <b>"Run 5 Simulations"</b> or <b>"Evolve Fly Brain"</b> to generate training history.</p>
+        </div>`;
+    } else {
+      listEl.innerHTML = '';
+      // Show newest runs first
+      [...simulationHistory].reverse().forEach((run) => {
+        const card = document.createElement('div');
+        card.className = 'sim-card';
+        const isPos = (run.avg_return_pct || 0) >= 0;
+        const bestRet = run.best_return_pct || 0;
+        const epData = run.episodes_data || [];
+
+        card.innerHTML = `
+          <div class="sim-card-header">
+            <div class="sim-run-tag">
+              <span class="sim-run-num">Run #${run.run}</span>
+              <span class="sim-timestamp">${run.timestamp || ''}</span>
+            </div>
+            <span class="sim-return-badge ${isPos ? 'pos' : 'neg'}">
+              ${isPos ? '+' : ''}${(run.avg_return_pct || 0).toFixed(2)}%
+            </span>
+          </div>
+          <div class="sim-meta-row">
+            <div class="sim-meta-item">
+              <span class="sim-meta-lbl">Episodes</span>
+              <span class="sim-meta-val">${run.episodes}</span>
+            </div>
+            <div class="sim-meta-item">
+              <span class="sim-meta-lbl">Best Ep</span>
+              <span class="sim-meta-val ${bestRet >= 0 ? 'pos' : 'neg'}">${bestRet >= 0 ? '+' : ''}${bestRet.toFixed(1)}%</span>
+            </div>
+            <div class="sim-meta-item">
+              <span class="sim-meta-lbl">Win Rate</span>
+              <span class="sim-meta-val">${run.avg_win_rate || '—'}%</span>
+            </div>
+            <div class="sim-meta-item">
+              <span class="sim-meta-lbl">Trades</span>
+              <span class="sim-meta-val">${run.avg_trades || '—'}</span>
+            </div>
+          </div>
+          <div class="sim-card-actions">
+            <button class="sim-btn-inspect" data-run-id="${run.run}">
+              🔬 Inspect in Lab
+            </button>
+            ${epData.length > 0 ? `<button class="sim-toggle-btn" data-run-toggle="${run.run}">▼ Show Episodes (${epData.length})</button>` : ''}
+          </div>
+          ${epData.length > 0 ? `
+            <div class="sim-episodes-table-wrap" id="sim-episodes-${run.run}" style="display:none">
+              <table class="sim-episodes-table">
+                <thead>
+                  <tr>
+                    <th>Ep</th>
+                    <th>Return</th>
+                    <th>Sharpe</th>
+                    <th>Win%</th>
+                    <th>Trades</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${epData.map(e => `
+                    <tr>
+                      <td>#${e.episode}</td>
+                      <td style="color:${e.return_pct >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:600">
+                        ${e.return_pct >= 0 ? '+' : ''}${e.return_pct}%
+                      </td>
+                      <td>${e.sharpe}</td>
+                      <td>${e.win_rate}%</td>
+                      <td>${e.trades}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : ''}
+        `;
+        listEl.appendChild(card);
+      });
+
+      // Attach inspect handlers
+      listEl.querySelectorAll('.sim-btn-inspect').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const rId = parseInt(btn.dataset.runId);
+          const found = simulationHistory.find(r => r.run === rId);
+          if (found) {
+            openLabModal(found);
+          }
+        });
+      });
+
+      // Attach table toggle handlers
+      listEl.querySelectorAll('.sim-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const rId = btn.dataset.runToggle;
+          const wrap = $(`sim-episodes-${rId}`);
+          if (wrap) {
+            const isHidden = wrap.style.display === 'none';
+            wrap.style.display = isHidden ? 'block' : 'none';
+            btn.textContent = isHidden ? `▲ Hide Episodes` : `▼ Show Episodes (${wrap.querySelectorAll('tbody tr').length})`;
+          }
+        });
+      });
+    }
+  }
+
+  // Render Mini List in #tab-stats
+  const statsList = $('stats-sim-list');
+  if (statsList) {
+    if (simulationHistory.length === 0) {
+      statsList.innerHTML = `<div class="sim-mini-empty">No simulation runs recorded.</div>`;
+    } else {
+      statsList.innerHTML = '';
+      [...simulationHistory].slice(-5).reverse().forEach(run => {
+        const item = document.createElement('div');
+        item.className = 'sim-mini-item';
+        const isPos = (run.avg_return_pct || 0) >= 0;
+        item.innerHTML = `
+          <span><b>Run #${run.run}</b> <small style="color:var(--txt-dim)">(${run.episodes} eps)</small></span>
+          <span style="color:${isPos ? 'var(--green)' : 'var(--red)'};font-weight:600">
+            ${isPos ? '+' : ''}${(run.avg_return_pct || 0).toFixed(2)}%
+          </span>
+        `;
+        item.addEventListener('click', () => {
+          openLabModal(run);
+        });
+        statsList.appendChild(item);
+      });
+    }
+  }
+}
+function startAuto() {
+  autoPilot = true;
+  qAutoBtn.textContent = '⏹ Stop Auto-Pilot';
+  qAutoBtn.classList.add('running');
+  scheduleNext();
+}
+
+function stopAuto() {
+  autoPilot = false;
+  clearTimeout(autoTimer);
+  qAutoBtn.textContent = '▶ Start Auto-Pilot';
+  qAutoBtn.classList.remove('running');
+}
+
+function scheduleNext() {
+  if (!autoPilot) return;
+  const rawDelay = parseInt(qSpeedSlider.value);
+  const delay = isNaN(rawDelay) || rawDelay < 16 ? 400 : rawDelay;
+  autoTimer = setTimeout(async () => {
+    if (!autoPilot) return;
+    const d = await apiStep(-1);
+    // If done, handleStepResult manages the auto-reset + reschedule.
+    // Only self-schedule here when NOT done.
+    if (d && !d.done && autoPilot) scheduleNext();
+  }, delay);
+}
+
+/* ─────────────────────────────────────────────
+    Event Listeners
+───────────────────────────────────────────── */
+/* Buttons are set up in boot() after DOM ready */
+
+$('reset-btn').addEventListener('click', () => {
+  stopAuto();
+  apiReset();
+});
+
+$('auto-btn').addEventListener('click', () => {
+  autoPilot ? stopAuto() : startAuto();
+});
+
+$('train-batch-btn').addEventListener('click', () => {
+  stopAuto();
+  apiTrainBatch();
+});
+
+$('train-sims-btn').addEventListener('click', () => {
+  stopAuto();
+  apiRunSimulations();
+});
+
+qSpeedSlider.addEventListener('input', () => {
+  qSpeedVal.textContent = qSpeedSlider.value + ' ms';
+});
+
+$('view-mode').addEventListener('change', e => {
+  currentView = e.target.value;
+  if (currentView === 'biological') {
+    showTracts = false;
+    if (atlasPointsMesh) atlasPointsMesh.visible = true;
+    if (instancedMesh) instancedMesh.visible = true;
+    if (brainShellMesh) brainShellMesh.visible = true;
+  } else if (currentView === 'connectome') {
+    showTracts = true;
+    if (atlasPointsMesh) atlasPointsMesh.visible = true;
+    if (instancedMesh) instancedMesh.visible = true;
+    if (brainShellMesh) brainShellMesh.visible = true;
+  } else if (currentView === 'tracts') {
+    showTracts = true;
+    if (atlasPointsMesh) atlasPointsMesh.visible = false;
+    if (instancedMesh) instancedMesh.visible = false;
+    if (brainShellMesh) brainShellMesh.visible = false;
+  } else if (currentView === 'circuit') {
+    showTracts = false;
+    if (atlasPointsMesh) atlasPointsMesh.visible = false;
+    if (instancedMesh) instancedMesh.visible = true;
+    if (brainShellMesh) brainShellMesh.visible = true;
+  }
+  const tractBtn = $('toggle-tracts-btn');
+  if (tractBtn) tractBtn.textContent = showTracts ? '⚡ Tracts: ON' : '⚡ Tracts: OFF';
+  buildSynapticLines();
+  updateBrainViz(spikeData1024, currentDopamine);
+});
+
+$('colour-mode').addEventListener('change', () => {
+  updateBrainViz(spikeData1024, currentDopamine);
+});
+
+// Evolution Lab open/close
+['open-lab-btn', 'open-lab-top-btn'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('click', () => openLabModal(lastTrainData));
+});
+
+['close-lab-btn', 'close-lab-footer-btn'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('click', closeLabModal);
+});
+
+const trainAgainBtn = $('train-again-btn');
+if (trainAgainBtn) {
+  trainAgainBtn.addEventListener('click', () => {
+    closeLabModal();
+    stopAuto();
+    apiTrainBatch();
+  });
+}
+
+// Close modal on backdrop click
+$('evolution-modal')?.addEventListener('click', e => {
+  if (e.target === $('evolution-modal')) closeLabModal();
+});
+
+// Policy chip selector styling
+document.querySelectorAll('input[name="policy"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    document.querySelectorAll('.policy-chip').forEach(c => c.classList.remove('active'));
+    radio.closest('.policy-chip').classList.add('active');
+  });
+});
+
+// Neuropil filter buttons
+document.querySelectorAll('.np-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.np-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRegionFilter = btn.dataset.region || 'all';
+    updateBrainViz(spikeData1024, currentDopamine);
+  });
+});
+
+/* ─────────────────────────────────────────────
+   Resize handling
+───────────────────────────────────────────── */
+function handleResize() {
+  const wrap = $('brain-canvas-wrap');
+  if (!wrap || !threeRenderer) return;
+  const W = Math.max(wrap.clientWidth, 320);
+  const H = Math.max(wrap.clientHeight, 270);
+  threeCamera.aspect = W / H;
+  threeCamera.updateProjectionMatrix();
+  threeRenderer.setSize(W, H);
+  drawPortfolioChart();
+  drawRewardChart();
+  drawLearningHistoryChart();
+  drawOscilloscope();
+}
+window.addEventListener('resize', handleResize);
+
+/* ─────────────────────────────────────────────
+   Boot
+───────────────────────────────────────────── */
+async function boot() {
+  initTabs();
+  await apiPing();
+  await fetchLearningHistory();
+  await fetchSimulationHistory();
+
+  // Clear sims button & View all link setup
+  const clearSimsBtn = $('btn-clear-sims');
+  if (clearSimsBtn) {
+    clearSimsBtn.addEventListener('click', apiClearSimulationHistory);
+  }
+  const viewAllSimsLink = $('link-view-all-sims');
+  if (viewAllSimsLink) {
+    viewAllSimsLink.addEventListener('click', () => {
+      const tabBtn = document.querySelector('.tab-btn[data-tab="sims"]');
+      if (tabBtn) tabBtn.click();
+    });
+  }
+  // Fetch neuron count from server BEFORE building the 3-D brain, so the
+  // activeCoords / neuronRegions arrays and InstancedMesh are sized correctly.
+  try {
+    const r = await fetch(`${API}/brain_status`);
+    if (r.ok) {
+      const d = await r.json();
+      N_NEURONS = d.N_NEURONS || 1024;
+      activeCoords = new Float32Array(N_NEURONS * 3);
+      neuronRegions = new Uint8Array(N_NEURONS);
+    }
+  } catch {}
+  initThree();
+  await apiReset();
+  updateNeuronCountDisplay();
+// Initialize simulations button state
+   const simsBtn = $('train-sims-btn');
+   if (simsBtn) simsBtn.disabled = totalEpisodes === 0;
+
+   // Set up action button event listeners (after DOM is ready)
+   ['btn-buy25','btn-buy50','btn-buy100','btn-hold','btn-sell25','btn-sell50','btn-sell100'].forEach(id => {
+      const btn = $(id);
+      if (btn) {  // Check if button exists before adding event listener
+        btn.addEventListener('click', () => {
+          const action = parseInt(btn.dataset.action);
+          apiStep(action);
+        });
+      }
+   });
+ }
+
+// Start once DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}

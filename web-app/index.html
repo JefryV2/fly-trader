@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-neuron-count="title">FlyTrader — Drosophila MaleCNS 1024-LIF Connectome × RL</title>
+  <meta name="description" content="Drosophila connectome-based reinforcement learning trading platform using 1024 biologically-grounded spiking LIF neurons." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════ TOP BAR ═══════════════════════ -->
+  <header id="topbar">
+    <div class="logo">
+      <span class="fly-icon">🪰</span>
+      <div>
+        <span class="logo-text">FlyTrader</span>
+        <span class="logo-sub">MaleCNS <span data-neuron-count="1024-LIF">1024-LIF</span> × Dopaminergic RL</span>
+      </div>
+    </div>
+
+    <!-- Live stats strip (updated from JS) -->
+    <div class="topbar-stats">
+      <div class="stat-chip">
+        <span class="stat-chip-label">Portfolio</span>
+        <span class="stat-chip-val" id="tb-portfolio">$100,000</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Return</span>
+        <span class="stat-chip-val" id="tb-return">+0.00%</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Sharpe</span>
+        <span class="stat-chip-val" id="tb-sharpe">—</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Drawdown</span>
+        <span class="stat-chip-val" id="tb-drawdown">—</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Win Rate</span>
+        <span class="stat-chip-val" id="tb-winrate">—</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Step</span>
+        <span class="stat-chip-val" id="tb-step">0 / 723</span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div class="ticker-badge" id="ticker-badge">AAPL · 753 Days</div>
+      <div class="brain-badge" id="brain-badge">🧠 Gen 1 · Ep 0</div>
+      <div class="dopamine-pill" id="dopamine-pill">
+        <span class="da-label">DA:</span>
+        <span id="dopamine-val">0.000</span>
+      </div>
+      <button class="lab-pill-btn" id="open-lab-top-btn">🔬 Evolution Lab</button>
+      <div class="status-pill" id="status-pill">
+        <span class="dot"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════ MAIN GRID ═══════════════════════ -->
+  <main id="app-grid">
+
+    <!-- ── LEFT SIDEBAR ── -->
+    <aside id="left-col">
+
+      <!-- Portfolio card -->
+      <div class="card" id="portfolio-card">
+        <div class="card-label">Portfolio</div>
+        <div class="card-value" id="portfolio-val">$100,000.00</div>
+        <div class="card-sub pos" id="return-val">+0.00%</div>
+      </div>
+
+      <!-- Metric pills -->
+      <div class="metrics-row">
+        <div class="metric-pill">
+          <div class="metric-label">Sharpe</div>
+          <div class="metric-num" id="sharpe-val">—</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Drawdown</div>
+          <div class="metric-num" id="drawdown-val">—</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Win %</div>
+          <div class="metric-num" id="winrate-val">—</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Step</div>
+          <div class="metric-num" id="step-val">0</div>
+        </div>
+      </div>
+
+      <!-- Controls card -->
+      <div class="card" id="action-card">
+
+        <!-- Auto-pilot row -->
+        <div class="card-label">Auto-Pilot</div>
+        <div class="autopilot-row">
+          <button class="toggle-btn" id="auto-btn">▶ Start Auto-Pilot</button>
+          <div class="speed-group">
+            <input type="range" id="speed-slider" min="16" max="1500" value="400" step="16" />
+            <span id="speed-val">400ms</span>
+          </div>
+        </div>
+
+        <!-- Policy grid 2×2 -->
+        <div class="card-label">Decision Policy</div>
+        <div class="policy-grid">
+          <label class="policy-chip active">
+            <input type="radio" name="policy" value="brain" checked />
+            <span class="chip-title">🪰 Fly Brain (RL)</span>
+            <span class="chip-desc" data-neuron-count="1024-LIF"><span data-neuron-count="1024">1,024</span>-LIF actor-critic</span>
+          </label>
+          <label class="policy-chip">
+            <input type="radio" name="policy" value="momentum" />
+            <span class="chip-title">📈 Momentum</span>
+            <span class="chip-desc">Trend surfer</span>
+          </label>
+          <label class="policy-chip">
+            <input type="radio" name="policy" value="mean-revert" />
+            <span class="chip-title">🛡️ Mean-Revert</span>
+            <span class="chip-desc">Volatility harvester</span>
+          </label>
+          <label class="policy-chip">
+            <input type="radio" name="policy" value="random" />
+            <span class="chip-title">🎲 Random</span>
+            <span class="chip-desc">Stochastic baseline</span>
+          </label>
+        </div>
+
+        <!-- Online STDP toggle -->
+        <div class="learning-control">
+          <label class="switch-row">
+            <input type="checkbox" id="learning-toggle" checked />
+            <span class="switch-slider"></span>
+            <span>Online Dopaminergic Learning (STDP)</span>
+          </label>
+        </div>
+
+        <!-- Train + Lab buttons -->
+        <div class="train-action-row">
+          <button class="train-btn" id="train-batch-btn">
+            <span class="btn-icon">⚡</span><span>Evolve Brain (25 Eps)</span>
+          </button>
+          <button class="train-btn" id="train-sims-btn" disabled>
+            <span class="btn-icon">🔄</span><span>Run 5 Simulations</span>
+          </button>
+          <button class="lab-btn" id="open-lab-btn" title="Open Synaptic Evolution Lab">🔬 Lab</button>
+        </div>
+
+        <!-- Manual override -->
+        <div class="card-label">Manual Override</div>
+        <div class="action-btns">
+          <button class="action-btn buy"  id="btn-buy25"  data-action="1">▲ Buy 25%</button>
+          <button class="action-btn buy"  id="btn-buy50"  data-action="2">▲ Buy 50%</button>
+          <button class="action-btn buy"  id="btn-buy100" data-action="3">▲ Buy 100%</button>
+          <button class="action-btn hold" id="btn-hold"   data-action="0">⏸ HOLD</button>
+          <button class="action-btn sell" id="btn-sell25"  data-action="4">▼ Sell 25%</button>
+          <button class="action-btn sell" id="btn-sell50"  data-action="5">▼ Sell 50%</button>
+          <button class="action-btn sell" id="btn-sell100" data-action="6">▼ Sell 100%</button>
+        </div>
+      </div>
+
+      <!-- Reset -->
+      <button class="reset-btn" id="reset-btn">↺ Reset Episode</button>
+
+      <!-- Trade log -->
+      <div class="card" id="trade-card">
+        <div class="card-label">Recent Trades</div>
+        <div id="trade-log"></div>
+      </div>
+
+    </aside>
+
+    <!-- ── CENTRE: CHART + 3D BRAIN ── -->
+    <section id="centre-col">
+
+      <!-- Portfolio chart -->
+      <div class="card chart-card">
+        <div class="card-label">
+          Portfolio History vs Buy &amp; Hold
+          <span class="chart-legend">
+            <span class="leg leg-port">■ Fly Trader</span>
+            <span class="leg leg-bh">■ Buy &amp; Hold</span>
+          </span>
+        </div>
+        <canvas id="port-chart"></canvas>
+      </div>
+
+      <!-- 3D Fly Brain -->
+      <div class="card brain-card">
+        <div class="brain-header">
+          <div class="brain-title-group">
+            <span class="b-title">Live Neural Activity — Drosophila MaleCNS (124,289 Biological Somata × <span data-neuron-count="1024">1,024</span> Spiking LIF Neurons)</span>
+            <span class="brain-legend-pill" id="spike-rate">Spike rate: 0.0%</span>
+          </div>
+          <div class="brain-hud-badges">
+            <span class="hud-badge" id="hud-dopamine">DA: 0.000</span>
+            <span class="hud-badge" id="hud-voltage">Vm: -70.0 mV</span>
+          </div>
+        </div>
+
+        <!-- Neuropil filter pills -->
+        <div class="neuropil-filter-row">
+          <button class="np-filter-btn active" data-region="all">All Brain (124,289)</button>
+          <button class="np-filter-btn np-al"   data-region="optic">● Optic Lobes (90,807)</button>
+          <button class="np-filter-btn np-kc"   data-region="central">● Central Brain (32,170)</button>
+          <button class="np-filter-btn np-cx"   data-region="descending">● Descending (1,312)</button>
+          <button class="np-filter-btn np-dan"  data-region="agent">● <span data-neuron-count="1024">1,024-LIF</span> Trader Circuit</button>
+        </div>
+
+        <!-- 3D canvas + oscilloscope overlay -->
+        <div id="brain-canvas-wrap">
+          <canvas id="brain-canvas"></canvas>
+          <div class="oscilloscope-tray" id="oscilloscope-tray">
+            <div class="osc-header">
+              <span class="osc-title">Membrane Potential Vm Oscilloscope</span>
+              <span class="osc-threshold">— -55 mV threshold</span>
+            </div>
+            <canvas id="oscilloscope-canvas" width="800" height="36"></canvas>
+            <div class="osc-legend">
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00e5ff"></div>AL</div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#8c52ff"></div>KC</div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ffb703"></div>CX</div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ff3366"></div>DAN</div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00f59b"></div>MBON</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MBON action valence bars -->
+        <div class="deliberation-box">
+          <div class="delib-label">MBON Valence (Action Probabilities):</div>
+          <div class="delib-bars">
+            <div class="d-bar-group" id="bar-grp-hold">
+              <span class="d-name">HOLD</span>
+              <div class="d-bar-bg"><div class="d-bar-fill hold" id="prob-hold-fill" style="width:14%"></div></div>
+              <span class="d-pct" id="prob-hold-text">14%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-buy25">
+              <span class="d-name">BUY 25%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy25-fill" style="width:16%"></div></div>
+              <span class="d-pct" id="prob-buy25-text">16%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-buy50">
+              <span class="d-name">BUY 50%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy50-fill" style="width:17%"></div></div>
+              <span class="d-pct" id="prob-buy50-text">17%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-buy100">
+              <span class="d-name">BUY 100%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy100-fill" style="width:15%"></div></div>
+              <span class="d-pct" id="prob-buy100-text">15%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-sell25">
+              <span class="d-name">SELL 25%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell25-fill" style="width:14%"></div></div>
+              <span class="d-pct" id="prob-sell25-text">14%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-sell50">
+              <span class="d-name">SELL 50%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell50-fill" style="width:14%"></div></div>
+              <span class="d-pct" id="prob-sell50-text">14%</span>
+            </div>
+            <div class="d-bar-group" id="bar-grp-sell100">
+              <span class="d-name">SELL 100%</span>
+              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell100-fill" style="width:10%"></div></div>
+              <span class="d-pct" id="prob-sell100-text">10%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- View controls -->
+        <div class="brain-controls">
+          <label>View:</label>
+          <select id="view-mode">
+            <option value="biological" selected>🔬 Real MaleCNS Brain (124k Somata)</option>
+            <option value="connectome">🧠 Connectome + Real Anatomy</option>
+            <option value="tracts">⚡ Bundled Fascicles &amp; Tracts</option>
+            <option value="circuit">🎯 <span data-neuron-count="1024">1,024-LIF</span> Agent Circuit</option>
+          </select>
+          <label style="margin-left:.5rem">Palette:</label>
+          <select id="colour-mode">
+            <option value="anatomical" selected>Anatomical</option>
+            <option value="fire">Dopamine Fire</option>
+            <option value="blue">Ice Synapse</option>
+            <option value="matrix">Matrix Neuro</option>
+          </select>
+          <button id="toggle-tracts-btn" class="cam-btn" title="Toggle synaptic tracts">⚡ Tracts: OFF</button>
+          <button id="recenter-cam-btn" class="cam-btn" title="Reset to frontal view">⌖ Frontal View</button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── RIGHT COLUMN — TABBED ── -->
+    <aside id="right-col">
+
+      <!-- Tab nav -->
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="neural">🧠 Neural</button>
+        <button class="tab-btn" data-tab="stats">📊 Stats</button>
+        <button class="tab-btn" data-tab="sims">🧪 Simulations <span class="tab-badge" id="sim-tab-badge">0</span></button>
+        <button class="tab-btn" data-tab="control">⚙️ Info</button>
+      </div>
+
+      <!-- ─ NEURAL TAB ─ -->
+      <div class="tab-panel active" id="tab-neural">
+
+        <!-- KC Activity Matrix heatmap -->
+        <div class="card">
+          <div class="card-label">KC Activity Matrix (<span data-neuron-count="1024">1,024</span>-d)</div>
+          <canvas id="heatmap-canvas" width="256" height="256"></canvas>
+        </div>
+
+        <!-- Neuropil spiking rates + Vm -->
+        <div class="card" id="neuropil-card">
+          <div class="card-label">Neuropil Spike Rates &amp; Membrane Potential</div>
+          <div class="region-meters">
+            <div class="r-row">
+              <span class="r-name">Antennal Lobe</span>
+              <div class="r-bar-wrap"><div class="r-bar r-al" id="rate-al" style="width:0%"></div></div>
+              <span class="r-val" id="val-al">0%</span>
+              <span class="r-vm" id="vm-al">-70 mV</span>
+            </div>
+            <div class="r-row">
+              <span class="r-name">Kenyon Cells</span>
+              <div class="r-bar-wrap"><div class="r-bar r-kc" id="rate-kc" style="width:0%"></div></div>
+              <span class="r-val" id="val-kc">0%</span>
+              <span class="r-vm" id="vm-kc">-70 mV</span>
+            </div>
+            <div class="r-row">
+              <span class="r-name">Central Complex</span>
+              <div class="r-bar-wrap"><div class="r-bar r-cx" id="rate-cx" style="width:0%"></div></div>
+              <span class="r-val" id="val-cx">0%</span>
+              <span class="r-vm" id="vm-cx">-70 mV</span>
+            </div>
+            <div class="r-row">
+              <span class="r-name">Dopamine DAN</span>
+              <div class="r-bar-wrap"><div class="r-bar r-dan" id="rate-dan" style="width:0%"></div></div>
+              <span class="r-val" id="val-dan">0%</span>
+              <span class="r-vm" id="vm-dan">-70 mV</span>
+            </div>
+            <div class="r-row">
+              <span class="r-name">MBON Output</span>
+              <div class="r-bar-wrap"><div class="r-bar r-mbon" id="rate-mbon" style="width:0%"></div></div>
+              <span class="r-val" id="val-mbon">0%</span>
+              <span class="r-vm" id="vm-mbon">-70 mV</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Peak firing neurons -->
+        <div class="card" id="activity-card">
+          <div class="card-label">Peak Firing Neurons</div>
+          <div id="activity-bars"></div>
+        </div>
+
+      </div>
+
+      <!-- ─ STATS TAB ─ -->
+      <div class="tab-panel" id="tab-stats">
+
+        <!-- Performance KPIs -->
+        <div class="card">
+          <div class="card-label">Session Performance</div>
+          <div class="perf-grid">
+            <div class="perf-card">
+              <span class="perf-label">Portfolio</span>
+              <span class="perf-val" id="perf-portfolio">$100,000</span>
+            </div>
+            <div class="perf-card">
+              <span class="perf-label">Total Return</span>
+              <span class="perf-val pos" id="perf-return">+0.00%</span>
+            </div>
+            <div class="perf-card">
+              <span class="perf-label">Sharpe Ratio</span>
+              <span class="perf-val" id="perf-sharpe">—</span>
+              <span class="perf-sub">Annualised</span>
+            </div>
+            <div class="perf-card">
+              <span class="perf-label">Max Drawdown</span>
+              <span class="perf-val" id="perf-drawdown">—</span>
+            </div>
+            <div class="perf-card">
+              <span class="perf-label">Win Rate</span>
+              <span class="perf-val" id="perf-winrate">—</span>
+            </div>
+            <div class="perf-card">
+              <span class="perf-label">Avg Reward</span>
+              <span class="perf-val" id="perf-avg-reward">0.00000</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reward sparkline (larger in stats tab) -->
+        <div class="card">
+          <div class="card-label">Reward Signal &amp; Dopamine</div>
+          <canvas id="reward-canvas-big"></canvas>
+          <div class="reward-stats" style="margin-top:.4rem">
+            <span>Avg: <b id="avg-reward">0.00000</b></span>
+            <span>Last: <b id="last-reward">0.00000</b></span>
+          </div>
+        </div>
+
+        <!-- Persistent Learning History -->
+        <div class="card">
+          <div class="card-label">
+            Learning Progress History
+            <span class="chart-legend">
+              <span class="leg leg-port">■ Return %</span>
+              <span class="leg leg-bh">■ Sharpe</span>
+              <span class="leg leg-win">■ Win %</span>
+            </span>
+          </div>
+          <canvas id="learn-history-chart"></canvas>
+          <div class="reward-stats" style="margin-top:.4rem">
+            <span>Total Episodes: <b id="learn-total-episodes">0</b></span>
+            <span>Last 50 Episodes</span>
+          </div>
+        </div>
+
+        <!-- Recent Simulations Overview Card in Stats -->
+        <div class="card">
+          <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Recent Simulation Runs</span>
+            <button class="view-all-sims-link" id="link-view-all-sims">View All ➔</button>
+          </div>
+          <div id="stats-sim-list" class="stats-sim-mini-list">
+            <div class="sim-mini-empty">No simulation runs recorded.</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─ SIMULATIONS TAB ─ -->
+      <div class="tab-panel" id="tab-sims">
+
+        <!-- Simulations Header Card -->
+        <div class="card">
+          <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Simulation Runs History</span>
+            <button class="btn-clear-sims" id="btn-clear-sims" title="Clear simulation history">Clear</button>
+          </div>
+          <!-- Aggregate KPIs -->
+          <div class="sim-kpi-grid">
+            <div class="sim-kpi-box">
+              <span class="sim-kpi-label">Total Runs</span>
+              <span class="sim-kpi-val" id="sim-agg-runs">0</span>
+            </div>
+            <div class="sim-kpi-box">
+              <span class="sim-kpi-label">Total Episodes</span>
+              <span class="sim-kpi-val" id="sim-agg-episodes">0</span>
+            </div>
+            <div class="sim-kpi-box">
+              <span class="sim-kpi-label">All-Time Best</span>
+              <span class="sim-kpi-val pos" id="sim-agg-best">+0.0%</span>
+            </div>
+            <div class="sim-kpi-box">
+              <span class="sim-kpi-label">Avg Return</span>
+              <span class="sim-kpi-val" id="sim-agg-avg">+0.0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Run list container -->
+        <div class="sim-runs-container" id="sim-runs-list">
+          <div class="sim-empty-state">
+            <span style="font-size:1.6rem;opacity:.6">🧪</span>
+            <p>No simulations run yet.</p>
+            <p class="sim-empty-sub">Click <b>"Run 5 Simulations"</b> or <b>"Evolve Fly Brain"</b> to generate training history.</p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─ INFO TAB ─ -->
+      <div class="tab-panel" id="tab-control">
+
+        <div class="card">
+          <div class="card-label">Brain Architecture</div>
+          <div style="font-size:.67rem;color:var(--txt-muted);line-height:1.8;font-family:var(--ff-mono)">
+            <div style="display:flex;justify-content:space-between"><span style="color:#00e5ff">Antennal Lobe</span><span>128 neurons · sensory</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:#8c52ff">Kenyon Cells</span><span>640 neurons · memory</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:#ffb703">Central Complex</span><span>128 neurons · compass</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:#ff3366">DAN PAM/PPL1</span><span>64 neurons · reward</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:#00f59b">MBON Output</span><span>64 neurons · valence</span></div>
+            <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:.4rem;padding-top:.4rem"><span>Total</span><span style="color:#fff;font-weight:600"><span data-neuron-count="1024">${N_NEURONS}</span> LIF Neurons</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Reward Signal</div>
+          <canvas id="reward-canvas"></canvas>
+          <div class="reward-stats">
+            <span>Avg Return: <b id="avg-reward-ctrl">0.00000</b></span>
+            <span>Last: <b id="last-reward-ctrl">0.00000</b></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Learning Config</div>
+          <div style="font-size:.67rem;color:var(--txt-muted);line-height:1.9;font-family:var(--ff-mono)">
+            <div style="display:flex;justify-content:space-between"><span>Algorithm</span><span style="color:var(--txt)">Actor-Critic (TD)</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Optimizer</span><span style="color:var(--txt)">Adam (lr=1e-3)</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Discount γ</span><span style="color:var(--txt)">0.95</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Buffer Size</span><span style="color:var(--txt)">500 exp.</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Batch Size</span><span style="color:var(--txt)">32 samples</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Entropy Bonus</span><span style="color:var(--txt)">0.01</span></div>
+            <div style="display:flex;justify-content:space-between"><span>Grad Clip</span><span style="color:var(--txt)">1.0</span></div>
+          </div>
+        </div>
+
+      </div>
+
+    </aside>
+
+  </main>
+
+  <!-- ═══════════════════════ EVOLUTION LAB MODAL ═══════════════════════ -->
+  <div class="modal-backdrop" id="evolution-modal">
+    <div class="modal-container">
+      <div class="modal-header">
+        <div class="m-title-group">
+          <span class="m-icon">🔬</span>
+          <div>
+            <h2 class="m-title">Drosophila Synaptic Plasticity &amp; Evolution Lab</h2>
+            <p class="m-subtitle">Detailed telemetry of Actor-Critic policy adaptation across 25 training episodes</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" id="close-lab-btn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- KPI row -->
+        <div class="lab-kpi-grid">
+          <div class="lab-kpi-card">
+            <span class="kpi-label">Average Return</span>
+            <span class="kpi-value pos" id="lab-avg-ret">+0.00%</span>
+            <span class="kpi-sub" id="lab-best-ret">Best: +0.00%</span>
+          </div>
+          <div class="lab-kpi-card">
+            <span class="kpi-label">Synaptic Plasticity</span>
+            <span class="kpi-value" id="lab-ltp-ltd">0 LTP / 0 LTD</span>
+            <span class="kpi-sub">Strengthened vs Weakened Synapses</span>
+          </div>
+          <div class="lab-kpi-card">
+            <span class="kpi-label">Policy Loss (TD-Error)</span>
+            <span class="kpi-value" id="lab-loss">0.00000</span>
+            <span class="kpi-sub">Actor-Critic convergence</span>
+          </div>
+          <div class="lab-kpi-card">
+            <span class="kpi-label">Total Episodes Evolved</span>
+            <span class="kpi-value" id="lab-total-episodes">0</span>
+            <span class="kpi-sub">Cumulative training cycles</span>
+          </div>
+        </div>
+
+        <!-- Episode progression chart -->
+        <div class="lab-section">
+          <div class="lab-section-header">
+            <h3>📈 Episode Performance Progression (25 Episodes)</h3>
+            <div class="lab-chart-legend">
+              <span class="legend-item leg-ret">■ Return %</span>
+              <span class="legend-item leg-win">■ Win Rate</span>
+              <span class="legend-item leg-loss">■ Loss (×100)</span>
+            </div>
+          </div>
+          <div class="evo-chart-wrap">
+            <canvas id="evo-chart" width="800" height="155"></canvas>
+          </div>
+        </div>
+
+        <div class="lab-two-col">
+          <!-- Plasticity matrix -->
+          <div class="lab-section">
+            <div class="lab-section-header">
+              <h3>🧬 Synaptic Weight Deltas (ΔW)</h3>
+              <span class="lab-pill-legend">Green = LTP · Red = LTD</span>
+            </div>
+            <div class="plasticity-grid" id="plasticity-grid"></div>
+          </div>
+
+          <!-- Valence evolution -->
+          <div class="lab-section">
+            <div class="lab-section-header">
+              <h3>🎯 Policy Valence Evolution</h3>
+              <span class="lab-pill-legend">Before → After Training</span>
+            </div>
+            <div class="valence-comparison" id="valence-comparison">
+              <div class="v-col">
+                <h4>Before (Naive)</h4>
+                <div class="v-bars" id="v-bars-before">
+                  <div class="v-bar"><span class="v-tag">HOLD</span><div class="v-fill hold" id="vb-hold" style="width:33%"></div><span>33%</span></div>
+                  <div class="v-bar"><span class="v-tag">BUY</span><div class="v-fill buy" id="vb-buy" style="width:33%"></div><span>33%</span></div>
+                  <div class="v-bar"><span class="v-tag">SELL</span><div class="v-fill sell" id="vb-sell" style="width:34%"></div><span>34%</span></div>
+                </div>
+              </div>
+              <div class="v-divider">➔</div>
+              <div class="v-col">
+                <h4>After (Evolved)</h4>
+                <div class="v-bars" id="v-bars-after">
+                  <div class="v-bar"><span class="v-tag">HOLD</span><div class="v-fill hold" id="va-hold" style="width:33%"></div><span>33%</span></div>
+                  <div class="v-bar"><span class="v-tag">BUY</span><div class="v-fill buy" id="va-buy" style="width:33%"></div><span>33%</span></div>
+                  <div class="v-bar"><span class="v-tag">SELL</span><div class="v-fill sell" id="va-sell" style="width:34%"></div><span>34%</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-secondary" id="close-lab-footer-btn">Close Lab</button>
+        <button class="btn-primary" id="train-again-btn">⚡ Evolve 25 More Episodes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <!-- Three.js (local) + App logic -->
+  <script src="/static/three.min.js"></script>
+  <script src="/static/script.js?v=7"></script>
+</body>
+</html>
