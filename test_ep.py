@@ -6,7 +6,7 @@ from env import FlyTradeEnv
 from pathlib import Path
 
 env = FlyTradeEnv(Path('data/AAPL_daily.csv'), window_size=30)
-agent = FlyBrainAgent(obs_dim=330, use_connectome=False)
+agent = FlyBrainAgent(obs_dim=390, use_connectome=False)  # 30*5 OHLCV + 30*8 indicators
 
 obs, _ = env.reset()
 action, probs, value, spikes = agent.select_action(obs, reward=0.0)

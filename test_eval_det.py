@@ -7,7 +7,7 @@ from fly_brain import FlyBrainAgent
 from env import FlyTradeEnv
 
 env = FlyTradeEnv(Path('data/AAPL_daily.csv'), window_size=30, enable_sl_tp=True)
-agent = FlyBrainAgent(obs_dim=330, use_connectome=False)
+agent = FlyBrainAgent(obs_dim=390, use_connectome=False)  # 30*5 OHLCV + 30*8 indicators
 
 # Load best checkpoint or latest checkpoint
 cp_path = None

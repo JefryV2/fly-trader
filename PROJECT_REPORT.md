@@ -2,6 +2,21 @@
 **Date:** 2026-10-11  
 **Project Path:** `C:\Users\aziz dhouib\.gemini\antigravity-ide\scratch\fly-trader`
 
+> **⚠️ CORRECTION (2026-10-16).** Several claims below are **stale or were
+> in‑sample**. The authoritative, verified status lives in `README.md`
+> ("Current status"). In particular:
+> - Observation dim is **390** (30×5 OHLCV + 30×8 indicators), not 330.
+> - Headline returns (NVDA +1411.7%, Sharpe 0.9959, etc.) were measured on the
+>   **same** data the model was trained on, i.e. **in‑sample**, and are not
+>   evidence of skill. See `scripts/backtest.py` for held‑out numbers vs
+>   baselines.
+> - The cached "59,445 anatomical synapses" matrix has **unverified provenance**;
+>   rebuilding from the raw FlyWire files gives only ~1,130 edges among the
+>   selected neurons, so the cached matrix is effectively synthetic.
+> - The spiking LIF population is a **fixed, non‑differentiable feature
+>   extractor**; only the small read‑out is trained. "LTP/LTD plasticity" refers
+>   to a visualisation sample of one `nn.Linear`, not plasticity in the network.
+
 ---
 
 ## Executive Summary

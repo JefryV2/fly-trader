@@ -35,13 +35,25 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block"):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
         self.data = _load_ohlcv(data_path)
         required = ["Open", "High", "Low", "Close", "Volume"]
         assert all(col in self.data.columns for col in required), "Missing OHLCV columns"
+        # Optional inclusive date slicing, used for train/validation/test splits.
+        if start_date is not None:
+            self.data = self.data[self.data.index >= pd.to_datetime(start_date)]
+        if end_date is not None:
+            self.data = self.data[self.data.index <= pd.to_datetime(end_date)]
+        self.data = self.data.copy()
+        assert len(self.data) > window_size + 1, (
+            f"Not enough rows ({len(self.data)}) after date slicing "
+            f"[{start_date} .. {end_date}] for window_size={window_size}"
+        )
+        self.start_date = start_date
+        self.end_date = end_date
         self.n_steps = len(self.data) - self.window_size
         self._compute_indicators()
         n_ohlcv = window_size * len(required)
@@ -53,6 +65,8 @@ class FlyTradeEnv(gym.Env):
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.enable_sl_tp = enable_sl_tp
+        assert indicator_norm in ("block", "per_feature"), "indicator_norm must be 'block' or 'per_feature'"
+        self.indicator_norm = indicator_norm
         self.reset()
 
     # Fractional trade sizes for each action
@@ -151,17 +165,30 @@ class FlyTradeEnv(gym.Env):
                     ema_trend[i] = (close[i] - ema10[i]) / ema10[i]
 
         self.indicators = np.stack([rsi, macd_hist, bb_width, atr, trend_strength, vol_regime, sma_ratio, ema_trend], axis=1).astype(np.float32)
+        # Per-indicator statistics for the 'per_feature' normalisation mode.
+        # NOTE: computed over the whole (sliced) series. For strict walk-forward
+        # correctness these should come from the training slice only.
+        self.ind_mean = self.indicators.mean(axis=0).astype(np.float64)
+        self.ind_std = self.indicators.std(axis=0).astype(np.float64)
 
     def _get_observation(self, idx: int) -> np.ndarray:
         window = self.data.iloc[idx : idx + self.window_size][["Open", "High", "Low", "Close", "Volume"]]
         norm = window["Close"].iloc[0]
         ohlcv = (window / norm).values.flatten().astype(np.float32)
-        ind = self.indicators[idx : idx + self.window_size].flatten()
-        # Z-score normalize indicators for stable learning
-        ind_mean = np.mean(ind)
-        ind_std = np.std(ind)
-        if ind_std > 1e-6:
-            ind = (ind - ind_mean) / ind_std
+        ind = self.indicators[idx : idx + self.window_size].astype(np.float64)
+        if self.indicator_norm == "per_feature":
+            # Normalise each indicator independently (RSI vs ATR vs ema_trend
+            # live on very different scales). Keeps the trailing per-step
+            # indicators interpretable, unlike the legacy block z-score.
+            ind = (ind - self.ind_mean) / (self.ind_std + 1e-9)
+            ind = np.clip(ind, -5.0, 5.0)
+            ind = ind.flatten()
+        else:
+            ind = ind.flatten()
+            ind_mean = np.mean(ind)
+            ind_std = np.std(ind)
+            if ind_std > 1e-6:
+                ind = (ind - ind_mean) / ind_std
         return np.concatenate([ohlcv, ind])
 
     def reset(self, seed=None, options=None):

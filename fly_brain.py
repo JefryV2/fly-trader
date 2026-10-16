@@ -30,6 +30,8 @@ import sys
 from pathlib import Path
 from scipy.sparse import csr_matrix
 
+from config import OBS_DIM
+
 # ── FlyWire Connectome Data Loader ──────────────────────────────────────────
 
 def download_flywire_data(save_dir="flywire_data"):
@@ -82,131 +84,124 @@ def download_flywire_data(save_dir="flywire_data"):
                 return None, None
     
     return comp_path, conn_path
-def build_sparse_weights_from_connectome(comp_path, conn_path, target_neurons=1024):
+def build_sparse_weights_from_connectome(comp_path, conn_path, target_neurons=1024,
+                                         clip=0.45, normalize="degree", reciprocal_scale=0.0):
     """
-    Build a sparse weight matrix from FlyWire connectome data.
-    
-    Maps the full FlyWire connectome (~138k neurons) to a subset of neurons
-    for the 1024-neuron model while preserving anatomical connectivity patterns.
-    
+    Build a sparse (target_neurons x target_neurons) weight matrix from FlyWire
+    v783 data.
+
+    Schema (verified against the bundled files):
+      * ``2025_Completeness_783.csv`` : one row per neuron, index = root ID.
+      * ``2025_Connectivity_783.parquet`` : ``Presynaptic_Index`` /
+        ``Postsynaptic_Index`` are ROW POSITIONS into the completeness table
+        (range 0..138638 == n_rows-1), NOT root IDs.
+
+    Mapping is therefore row -> model index.  The model's anatomical partitions
+    (AL/KC/CX/DAN/MBON) are a *structural* split of the first ``target_neurons``
+    rows; the FlyWire rows used here are not classified by cell type, so this is
+    NOT a biologically validated mapping (documented in the returned provenance).
+
     Args:
-        comp_path: Path to 2025_Completeness_783.csv
-        conn_path: Path to 2025_Connectivity_783.parquet
-        target_neurons: Number of neurons to map to (default 1024)
-    
+        clip: absolute weight cap after normalisation.
+        normalize: "degree" (divide by per-target inbound degree so a fully
+                   active presynaptic population contributes ~clip),
+                   "max" (scale by global max), or "none".
+        reciprocal_scale: optional weak reciprocal edges (0.0 = disabled).
+
     Returns:
-        torch.sparse_coo_tensor: Sparse weight matrix of shape (target_neurons, target_neurons)
-        mapping: dict with neuron index mappings
+        (scipy.sparse.csr_matrix, mapping dict)
     """
+    import hashlib
     import pandas as pd
-    
-    print(f"Building sparse weight matrix from FlyWire connectome...")
-    
-    # Load data
+
+    def _sha256(path, chunk=1 << 20):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(chunk), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    print("Building sparse weight matrix from FlyWire connectome...")
     df_comp = pd.read_csv(comp_path, index_col=0)
-    df_conn = pd.read_parquet(conn_path)
-    
-    print(f"  Loaded {len(df_comp)} neurons and {len(df_conn)} synapses")
-    
-    # Select subset of neurons to map to target_neurons
-    # Prioritize anatomically relevant regions: AL (0-127), KC (128-767), CX (768-895), MBON (960-1023)
-    target_indices = []
-    
-    # Use anatomically diverse neurons to cover the model structure
-    al_range = min(128, target_neurons // 4)
-    kc_range = min(640, max(0, target_neurons - al_range - 128))
-    cx_range = min(128, max(0, target_neurons - al_range - kc_range - 128))
-    dan_range = min(64, max(0, target_neurons - al_range - kc_range - cx_range - 128))
-    
-    # AL neurons (sensory)
-    target_indices.extend(range(al_range))
-    
-    # KC neurons (memory, sparse projection)
-    kc_needed = min(kc_range, 640)
-    target_indices.extend(range(128, 128 + kc_needed))
-    
-    # CX neurons (compass/regime)
-    cx_needed = min(cx_range, 128)
-    target_indices.extend(range(768, 768 + cx_needed))
-    
-    # DAN neurons (reward/punishment)
-    dan_needed = min(dan_range, 64)
-    target_indices.extend(range(896, 896 + dan_needed))
-    
-    # MBON neurons (output action valence)
-    mbon_needed = target_neurons - len(target_indices)
-    target_indices.extend(range(960, 960 + mbon_needed))
-    
-    print(f"  Selected {len(target_indices)} neurons for model mapping")
-    print(f"  AL: {al_range}, KC: {kc_needed}, CX: {cx_needed}, DAN: {dan_needed}, MBON: {mbon_needed}")
-    
-    # Build model index mapping (0 to target_neurons - 1)
-    flyid2model = {flyid: idx for idx, flyid in enumerate(selected_flyids)}
-    
-    # Filter connectivity data to include only selected source and target neurons
-    conn_filtered = df_conn[
-        (df_conn['Presynaptic_Index'].isin(selected_flyids)) & 
-        (df_conn['Postsynaptic_Index'].isin(selected_flyids))
-    ].copy()
-    
-    print(f"  After filtering: {len(conn_filtered)} synapses within selected neurons")
-    
-    # Create sparse weight matrix
-    if len(conn_filtered) > 0:
-        src_indices = [flyid2model[src] for src in conn_filtered['Presynaptic_Index']]
-        tgt_indices = [flyid2model[tgt] for tgt in conn_filtered['Postsynaptic_Index']]
-        weights = conn_filtered['Excitatory x Connectivity'].tolist()
-        
-        # Ensure we have symmetric connections for recurrent layers (CX ring)
-        # Add reciprocal connections for key pathway components
-        reciprocal_weights = []
-        reciprocal_src = []
-        reciprocal_tgt = []
-        
-        # For KC->MBON pathway, add some reciprocal connections to maintain dynamics
-        for i, (src, tgt, w) in enumerate(zip(src_indices, tgt_indices, weights)):
-            reciprocal_weights.append(w * 0.1)  # Weak reciprocal connections
-            reciprocal_src.append(tgt)
-            reciprocal_tgt.append(src)
-        
-        if reciprocal_weights:
-            src_indices.extend(reciprocal_src)
-            tgt_indices.extend(reciprocal_tgt)
-            weights.extend(reciprocal_weights)
-        
-        # Build COO sparse tensor
-        weight_coo = torch.sparse_coo_tensor(
-            [src_indices, tgt_indices], 
-            weights, 
-            (len(target_indices), len(target_indices)),
-            dtype=torch.float32
-        )
-        
-        # Clip to reasonable range [-0.6, 0.6] like the original simulator
-        weight_coo = torch.clamp(weight_coo, -0.6, 0.6)
-        
-        print(f"  Built sparse weight matrix: {weight_coo.shape}")
-        print(f"  Non-zero elements: {weight_coo.sparse_dim}")
-        
-        mapping = {
-            'flyid2i': flyid2i,
-            'selected_flyids': selected_flyids,
-            'target_indices': target_indices,
-            'connection_count': len(weights),
-            'anatomy': {
-                'AL': range(al_range),
-                'KC': range(128, 128 + kc_needed),
-                'CX': range(768, 768 + cx_needed),
-                'DAN': range(896, 896 + dan_needed),
-                'MBON': range(960, 960 + mbon_needed)
-            }
-        }
-        
-        dense = weight_coo.to_dense().cpu().numpy().astype(np.float32)
-        return csr_matrix(dense, dtype=np.float32), mapping
-    
-    print("  Warning: No synapses found within selected neurons, falling back to random weights")
-    return None, None
+    n_avail = len(df_comp)
+    print(f"  Loaded {n_avail} neurons")
+
+    # Structural partition sizes (fractions of the model, not cell-type based).
+    N = int(target_neurons)
+    sizes = {
+        "AL": int(round(N * 128 / 1024)),
+        "KC": int(round(N * 640 / 1024)),
+        "CX": int(round(N * 128 / 1024)),
+        "DAN": int(round(N * 64 / 1024)),
+    }
+    sizes["MBON"] = N - sum(sizes.values())
+
+    rows, offset = [], 0
+    for name in ("AL", "KC", "CX", "DAN", "MBON"):
+        count = min(sizes[name], max(0, n_avail - offset))
+        rows.extend(range(offset, offset + count))
+        offset += count
+    rows = rows[:N]
+    row2model = {r: k for k, r in enumerate(rows)}
+    print(f"  Selected {len(rows)} rows | " +
+          ", ".join(f"{k}:{v}" for k, v in sizes.items()))
+
+    cols = ["Presynaptic_Index", "Postsynaptic_Index", "Excitatory x Connectivity"]
+    df_conn = pd.read_parquet(conn_path, columns=cols)
+    selected = set(row2model)
+    sub = df_conn[
+        df_conn["Presynaptic_Index"].isin(selected)
+        & df_conn["Postsynaptic_Index"].isin(selected)
+    ]
+    n_syn = int(sub.shape[0])
+    print(f"  After filtering: {n_syn} synapses within the selected neurons")
+    if n_syn == 0:
+        print("  Warning: no synapses found within selected neurons")
+        return None, None
+
+    src = sub["Presynaptic_Index"].map(row2model).to_numpy()
+    tgt = sub["Postsynaptic_Index"].map(row2model).to_numpy()
+    w = sub["Excitatory x Connectivity"].to_numpy(dtype=np.float64)
+
+    if normalize == "degree":
+        deg = np.bincount(tgt, minlength=N).astype(np.float64)
+        deg[deg == 0] = 1.0
+        w = w / deg[tgt] * clip
+    elif normalize == "max":
+        mx = float(np.max(np.abs(w))) or 1.0
+        w = w / mx * clip
+    w = np.clip(w, -clip, clip).astype(np.float32)
+
+    src_all, tgt_all, w_all = src, tgt, w
+    if reciprocal_scale > 0:
+        src_all = np.concatenate([src, tgt])
+        tgt_all = np.concatenate([tgt, src])
+        w_all = np.concatenate([w, w * reciprocal_scale])
+
+    from scipy.sparse import coo_matrix
+    W = coo_matrix((w_all, (src_all, tgt_all)), shape=(N, N)).tocsr()
+
+    provenance = {
+        "source_files": {
+            Path(comp_path).name: _sha256(comp_path),
+            Path(conn_path).name: _sha256(conn_path),
+        },
+        "target_neurons": N,
+        "synapses_within_selection": n_syn,
+        "nnz": int(W.nnz),
+        "clip": clip,
+        "normalize": normalize,
+        "reciprocal_scale": reciprocal_scale,
+        "mapping": "row_index_of_completeness_csv -> model_index",
+        "cell_type_verified": False,
+    }
+    mapping = {
+        "row_to_model": row2model,
+        "partition_sizes": sizes,
+        "provenance": provenance,
+    }
+    print(f"  Built sparse weight matrix {W.shape} nnz={W.nnz}")
+    return W, mapping
 def init_weights_from_connectome(target_shape=(1024, 1024), rng=None):
     """
     Create random weights if connectome not available (fallback).
@@ -369,45 +364,51 @@ class MaleCNS1024Simulator:
         cached = try_load_connectome_weights(weight_cache)
         if cached is not None and cached.get('W') is not None:
             W = cached['W']
-            if W.shape == (self.N_NEURONS, self.N_NEURONS):
-                print("Using cached connectome weights")
+            shape = getattr(W, 'shape', None)
+            if shape == (self.N_NEURONS, self.N_NEURONS):
+                if 'provenance' in cached or (cached.get('mapping') or {}).get('provenance'):
+                    print("Using cached connectome weights (provenance recorded)")
+                else:
+                    print("WARNING: using cached connectome weights with UNVERIFIED provenance "
+                          f"({weight_cache}/connectome_weights.pkl). Regenerate with "
+                          "scripts/rebuild_connectome.py for an auditable build.")
                 return W
-            else:
-                print(f"Cached weights shape mismatch: {W.shape} vs {(self.N_NEURONS, self.N_NEURONS)}, regenerating")
-        
-        # Try to download and build from raw data
+            print(f"Cached weights shape mismatch: {shape} vs {(self.N_NEURONS, self.N_NEURONS)}, regenerating")
+
+        # Try to build from raw data
         comp_path = Path(connectome_dir) / "2025_Completeness_783.csv"
         conn_path = Path(connectome_dir) / "2025_Connectivity_783.parquet"
-        
         if comp_path.exists() and conn_path.exists():
             try:
-                import pandas as pd
-                weight_coo, mapping = build_sparse_weights_from_connectome(
+                W, mapping = build_sparse_weights_from_connectome(
                     str(comp_path), str(conn_path), target_neurons=self.N_NEURONS
                 )
-                if weight_coo is not None:
-                    W = weight_coo.to_dense().numpy().astype(np.float32)
-                    # Cache for future use
-                    save_connectome_weights({'W': W, 'mapping': mapping}, weight_cache)
+                if W is not None:
+                    save_connectome_weights(
+                        {'W': W, 'mapping': mapping, 'provenance': mapping.get('provenance')},
+                        weight_cache,
+                    )
                     return W
             except Exception as e:
                 print(f"Failed to build connectome weights: {e}")
-        
+
         # Try downloading data
         print("Connectome data not found locally. Attempting download...")
         comp_path, conn_path = download_flywire_data(connectome_dir)
         if comp_path and conn_path:
             try:
-                weight_coo, mapping = build_sparse_weights_from_connectome(
+                W, mapping = build_sparse_weights_from_connectome(
                     str(comp_path), str(conn_path), target_neurons=self.N_NEURONS
                 )
-                if weight_coo is not None:
-                    W = weight_coo.to_dense().numpy().astype(np.float32)
-                    save_connectome_weights({'W': W, 'mapping': mapping}, weight_cache)
+                if W is not None:
+                    save_connectome_weights(
+                        {'W': W, 'mapping': mapping, 'provenance': mapping.get('provenance')},
+                        weight_cache,
+                    )
                     return W
             except Exception as e:
                 print(f"Failed to build connectome weights from downloaded data: {e}")
-        
+
         print("Connectome unavailable, falling back to random weights")
         return self._build_random_weights(rng)
 
@@ -522,13 +523,15 @@ class FlyBrainAgent(nn.Module):
     - Online learning engine trains continuously from rewards and portfolio outcomes.
     
     Args:
-        obs_dim: Observation dimension (default 330 for 30-step OHLCV + 6 indicators window)
+        obs_dim: Observation dimension. Defaults to ``config.OBS_DIM`` (390 for
+                  a 30-step OHLCV + 8-indicator window). Prefer constructing via
+                  ``FlyBrainAgent(obs_dim=env.observation_space.shape[0])``.
         use_connectome: If True, use real FlyWire v783 connectome weights
         connectome_dir: Path to FlyWire data directory
         weight_cache: Path to cached weight pickle file
         N_NEURONS: Total neurons (default 1024). If >1024, uses more connectome data.
     """
-    def __init__(self, obs_dim: int = 330, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
+    def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
         super().__init__()
         self.simulator = MaleCNS1024Simulator(
             use_connectome=use_connectome,

@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from env import FlyTradeEnv
 from fly_brain import FlyBrainAgent
+from strategy import apply_preset
 
 # ── Brain Atlas Data Loader ────────────────────────────────────────────────
 def _load_brain_atlas():
@@ -323,34 +324,14 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
     # 7 actions: 0=Hold, 1=Buy 25%, 2=Buy 50%, 3=Buy 100%, 4=Sell 25%, 5=Sell 50%, 6=Sell 100%
     if auto_brain or action < 0 or action > 6:
         action, raw_action_probs, state_value, spikes_1024 = brain.select_action(obs, reward=_last_shaped_reward)
-        probs_arr = np.array(raw_action_probs, dtype=np.float32)
-
-        # Action masking to eliminate invalid actions:
-        if env.shares <= 1e-6:
-            probs_arr[4:] = 0.0  # Cannot sell if holding 0 shares
-            # In cash: aggressively favour buying. Cap Hold at 0.20 and boost Buy to >= 0.65.
-            # This directly undoes any collapsed policy that learned to idle.
-            if probs_arr[0] > 0.20:
-                excess = probs_arr[0] - 0.20
-                probs_arr[0] = 0.20
-                probs_arr[1:4] += excess / 3.0
-            probs_arr[1:4] = np.maximum(probs_arr[1:4], 0.22)
-        if env.cash < 200:
-            probs_arr[1:4] = 0.0  # Cannot buy if no cash left
-
-        # Take profit / Stop loss dynamic valence boost for shares held
-        if env.shares > 0 and getattr(env, 'entry_price', 0.0) > 0:
-            unrealized_pnl = (price - env.entry_price) / env.entry_price
-            if (unrealized_pnl > 0.015 or unrealized_pnl < -0.025) and probs_arr[4:].sum() > 0:
-                probs_arr[4:] *= 2.5
-
-        p_sum = float(probs_arr.sum())
-        if p_sum > 1e-6:
-            probs_arr /= p_sum
-        else:
-            probs_arr = np.zeros(7, dtype=np.float32)
-            probs_arr[0] = 1.0
-
+        # Shared masking path (config.MASK_PRESETS['live']); see strategy.py.
+        # Heuristics are opt-in per preset so the policy can also be evaluated
+        # honestly (see scripts/backtest.py).
+        probs_arr = apply_preset(
+            raw_action_probs, "live",
+            shares=env.shares, cash=env.cash,
+            price=price, entry_price=getattr(env, "entry_price", 0.0),
+        ).astype(np.float32)
         action_probs = probs_arr.tolist()
 
         # Dynamic action sampling: temperature-scaled policy sampling avoids static argmax lock
@@ -529,27 +510,12 @@ def train_batch(payload: TrainBatchPayload):
         while not done and step_count < train_env.n_steps:
             last_shaped = _last_shaped_reward if step_count == 0 else shaped_reward
             _, raw_action_probs, _, _ = brain.select_action(cur_obs, reward=last_shaped)
-            p_arr = np.array(raw_action_probs, dtype=np.float32)
-
-            # Action masking during training — same aggressive Buy floor as _run_step
-            if train_env.shares <= 1e-6:
-                p_arr[4:] = 0.0  # Cannot sell if 0 shares
-                if p_arr[0] > 0.20:
-                    excess = p_arr[0] - 0.20
-                    p_arr[0] = 0.20
-                    p_arr[1:4] += excess / 3.0
-                p_arr[1:4] = np.maximum(p_arr[1:4], 0.22)
-            if train_env.cash < 200:
-                p_arr[1:4] = 0.0  # Cannot buy if no cash
-            if train_env.shares > 0 and p_arr[4:].sum() < 0.20:
-                p_arr[4:] = np.maximum(p_arr[4:], 0.07)
-
-            p_sum = float(p_arr.sum())
-            if p_sum > 1e-6:
-                p_arr /= p_sum
-            else:
-                p_arr = np.zeros(7, dtype=np.float32)
-                p_arr[0] = 1.0
+            # Shared masking path (config.MASK_PRESETS['train']); see strategy.py.
+            p_arr = apply_preset(
+                raw_action_probs, "train",
+                shares=train_env.shares, cash=train_env.cash,
+                entry_price=getattr(train_env, "entry_price", 0.0),
+            ).astype(np.float32)
 
             # Exploration decay - slower decay to ensure sufficient exploration
             epsilon = max(0.05, 0.3 * (0.99 ** ep))  # Start at 30%, decay to 5%
@@ -750,26 +716,12 @@ def eval_episode(payload: EvalEpisodePayload):
 
     while not done and step_count < eval_env.n_steps:
         _, raw_probs, val, spikes = brain.select_action(cur_obs, reward=shaped_reward, deterministic=False)
-        p_arr = np.array(raw_probs, dtype=np.float32)
-
-        # Action masking
-        if eval_env.shares <= 1e-6:
-            p_arr[4:] = 0.0  # Cannot sell if holding 0 shares
-            if p_arr[1:4].sum() < 0.20:
-                p_arr[1:4] = np.maximum(p_arr[1:4], 0.10)
-            if p_arr[0] > 0.45:
-                p_arr[0] = 0.45
-        if eval_env.cash < 200:
-            p_arr[1:4] = 0.0  # Cannot buy if no cash
-        if eval_env.shares > 0 and p_arr[4:].sum() < 0.15:
-            p_arr[4:] = np.maximum(p_arr[4:], 0.05)
-
-        p_sum = float(p_arr.sum())
-        if p_sum > 1e-6:
-            p_arr /= p_sum
-        else:
-            p_arr = np.zeros(7, dtype=np.float32)
-            p_arr[0] = 1.0
+        # Shared masking path (config.MASK_PRESETS['eval']); see strategy.py.
+        p_arr = apply_preset(
+            raw_probs, "eval",
+            shares=eval_env.shares, cash=eval_env.cash,
+            entry_price=getattr(eval_env, "entry_price", 0.0),
+        ).astype(np.float32)
 
         if payload.deterministic:
             action = int(np.argmax(p_arr))
