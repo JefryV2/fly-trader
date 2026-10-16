@@ -35,7 +35,7 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block", reward_mode: str = "shaped"):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block", reward_mode: str = "shaped", dd_penalty: float = 0.0):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
@@ -71,6 +71,12 @@ class FlyTradeEnv(gym.Env):
         assert reward_mode in ("shaped", "excess", "logret"), \
             "reward_mode must be 'shaped', 'excess' or 'logret'"
         self.reward_mode = reward_mode
+        # Drawdown-sensitive term: penalises the *increase* in the agent's
+        # own peak-to-trough drawdown at each step. Zero by default (pure
+        # objective); a positive value is what makes de-risking pay, which is
+        # the only known way for a long-only daily strategy to beat passive
+        # exposure over a full cycle.
+        self.dd_penalty = float(dd_penalty)
         self.reset()
 
     # Fractional trade sizes for each action
@@ -223,6 +229,8 @@ class FlyTradeEnv(gym.Env):
         self.benchmark_entry_price = None
         self.benchmark_value = self.initial_cash
         self.prev_benchmark_value = self.initial_cash
+        # Peak equity, for the optional drawdown penalty.
+        self.peak_value = self.initial_cash
         obs = self._get_observation(self.current_step)
         return obs, {}
 
@@ -333,6 +341,20 @@ class FlyTradeEnv(gym.Env):
             reward = (log_ret - bench_log_ret) * 100.0
         else:
             reward = log_ret * 100.0
+
+        # Optional drawdown penalty: charge the *deepening* of the equity
+        # drawdown at this step. Being flat during a slide costs nothing (the
+        # drawdown does not deepen), so this is exactly the signal that teaches
+        # a long-only agent to step aside ahead of / during deep drawdowns.
+        if self.dd_penalty > 0.0:
+            prev_peak = self.peak_value
+            new_peak = max(prev_peak, portfolio_value)
+            dd_before = (prev_peak - prev_pv) / (prev_peak + 1e-12)
+            dd_after = (new_peak - portfolio_value) / (new_peak + 1e-12)
+            reward -= self.dd_penalty * max(0.0, dd_after - dd_before) * 100.0
+            self.peak_value = new_peak
+        else:
+            self.peak_value = max(self.peak_value, portfolio_value)
 
         if self.reward_mode == "shaped":
             # --- Legacy hand-coded regime guidance (kept for back-compat) ---

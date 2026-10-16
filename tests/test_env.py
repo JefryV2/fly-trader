@@ -116,3 +116,27 @@ def test_benchmark_value_tracks_price_ratio():
     first = float(env.data.iloc[env.window_size - 1]["Close"])
     last = float(env.data.iloc[len(env.data) - 2]["Close"])  # env stops one bar early
     assert env.benchmark_value == pytest.approx(env.initial_cash * last / first, rel=1e-6)
+
+
+# ── drawdown penalty (the term that makes de-risking learnable) ────────────
+def test_dd_penalty_punishes_deepening_drawdown_but_not_cash():
+    start, end = "2022-01-01", "2022-12-31"     # a drawdown year for AAPL
+    long_acts = [3] + [0] * 400                 # buy 100% then hold
+
+    plain = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                        reward_mode="excess", dd_penalty=0.0)
+    penalised = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                            reward_mode="excess", dd_penalty=1.0)
+    t_plain, _ = _run(plain, long_acts)
+    t_penalised, _ = _run(penalised, long_acts)
+    # Staying invested through a persistent drawdown must cost more.
+    assert t_penalised < t_plain - 1.0
+
+    # A pure-cash agent never prints a new equity low, so the penalty is a no-op.
+    cash_plain = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                             reward_mode="excess", dd_penalty=0.0)
+    cash_pen = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                           reward_mode="excess", dd_penalty=1.0)
+    s_plain, _ = _run(cash_plain, [0] * cash_plain.n_steps)
+    s_pen, _ = _run(cash_pen, [0] * cash_pen.n_steps)
+    assert s_pen == pytest.approx(s_plain)

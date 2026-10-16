@@ -58,6 +58,7 @@ def make_env(ticker, split, args):
         end_date=end,
         indicator_norm=args.indicator_norm,
         reward_mode=args.reward_mode,
+        dd_penalty=args.dd_penalty,
     )
 
 
@@ -135,7 +136,9 @@ def main():
     p.add_argument("--ticker", default="AAPL")
     p.add_argument("--all-tickers", action="store_true")
     p.add_argument("--plan", choices=list(SPLIT_PLANS), default="default",
-                   help="'default' (test 2024 bull) or 'bear2022' (test the 2022 drawdown)")
+                   help="split plan: 'default' (test 2024 bull), 'bear2022' "
+                        "(test the 2022 drawdown) or 'cycle' (train<=2019, "
+                        "test 2021H2-2024 = bear + bull)")
     p.add_argument("--episodes", type=int, default=40)
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--lr", type=float, default=3e-4)
@@ -153,6 +156,11 @@ def main():
                    help="probability floor on every action when sampling (0 = off). "
                         "A non-zero floor forces churn; default is off.")
     p.add_argument("--select-by", choices=["val_excess", "val_return", "val_sharpe"], default="val_excess")
+    p.add_argument("--dd-penalty", type=float, default=0.0,
+                   help="coefficient on a per-step *drawdown* penalty. WARNING: "
+                        "penalising the agent's own drawdown has a trivial optimum "
+                        "(never invest) and collapses to all-cash in practice; it is "
+                        "kept only as a documented negative result. Leave at 0.")
     p.add_argument("--val-seeds", type=int, default=3,
                    help="seeds averaged for stochastic validation model selection")
     p.add_argument("--no-buy-margin", dest="buy_margin", action="store_false", default=False,
@@ -199,9 +207,20 @@ def main():
     prior_state = copy.deepcopy(agent.get_policy_state())
 
     max_steps = args.max_steps if args.max_steps > 0 else None
-    # Selection guard: for the excess objective a score of 0 == buy & hold, so
-    # only a strictly positive validation excess wins the right to be shipped.
-    best_score = 0.0 if args.select_by == "val_excess" else -1e9
+    # Selection guard. The prior *is* buy & hold, so evaluating it on the
+    # validation slice gives the benchmark's own score; we only ship a learned
+    # checkpoint that beats that. For the excess objective the threshold is
+    # exactly 0 (0 == matching the benchmark).
+    baseline = evaluate_split(agent, tickers, "val", args, deterministic=True, n_seeds=1)
+    if args.select_by == "val_excess":
+        guard = 0.0
+    elif args.select_by == "val_sharpe":
+        guard = baseline["mean_sharpe"]
+    else:
+        guard = baseline["mean_buyhold"]
+    print(f"[train] buy&hold val baseline: ret={baseline['mean_buyhold']:.2f}% "
+          f"sharpe={baseline['mean_sharpe']:.3f}  ->  ship threshold={guard:.3f} ({args.select_by})")
+    best_score = guard
     saved = False
     for ep in range(args.episodes):
         ticker = tickers[ep % len(tickers)]

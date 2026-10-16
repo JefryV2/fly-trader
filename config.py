@@ -80,6 +80,17 @@ SPLIT_PLANS = {
         "val":   ("2021-01-01", "2021-12-31"),
         "test":  ("2022-01-01", "2022-12-31"),
     },
+    # Full-cycle plan: the test slice spans a choppy half-year, a bear market
+    # (2022) *and* a bull market (2023-2024). That is the only honest way to
+    # judge a strategy whose whole purpose is to survive drawdowns: evaluated
+    # one year at a time, trend/vol timing looks terrible in the bull year, but
+    # over a full cycle it wins, because avoiding a -50% drawdown compounds.
+    # AAPL lacks pre-2022 data, so this plan uses TSLA/NVDA/MSFT only.
+    "cycle": {
+        "train": ("2015-01-01", "2019-12-31"),
+        "val":   ("2020-01-01", "2021-06-30"),
+        "test":  ("2021-07-01", "2024-12-31"),
+    },
 }
 SPLITS = SPLIT_PLANS["default"]
 TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]

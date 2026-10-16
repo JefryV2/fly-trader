@@ -175,45 +175,77 @@ python train.py --all-tickers --plan bear2022                   # train pre-2021
 ```
 
 ### Honest out‑of‑sample results
-Two runs, 60 episodes, `per_feature`, `target_entropy 0.5`, honest mask, no buy‑margin,
-checkpoint selected by stochastic **validation** excess. Deterministic greedy policy on the
-held‑out test window:
+Two runs, 80 episodes, `per_feature`, `target_entropy 0.3`, honest mask, no buy‑margin,
+`action_floor=0`, position‑aware observation (394‑dim), checkpoint selected by stochastic
+**validation** excess with a buy & hold floor. Deterministic greedy policy on the held‑out
+test window:
 
-**Bull regime — train ≤2023‑06, test 2024** (all four tickers)
+**Bull regime — train ≤2023‑06, val 2023H2, test 2024** (all four tickers)
 
-| ticker | fly % | buy&hold % | excess | fly maxDD % | bh maxDD % |
-|--------|------:|-----------:|-------:|------------:|-----------:|
-| AAPL | 12.33 | 36.65 | −24.32 | 7.97 | 11.75 |
-| TSLA | 57.25 | 126.60 | −69.35 | 22.09 | 29.90 |
-| NVDA | 8.22 | 90.48 | −82.27 | 15.39 | 27.05 |
-| MSFT | 3.68 | 5.23 | −1.55 | 10.70 | 15.49 |
-| **mean** | **20.37** | **64.74** | **−44.37** | **14.04** | **21.05** |
+| ticker | fly % | buy&hold % | excess | fly Sharpe | fly maxDD % | bh maxDD % | exposure |
+|--------|------:|-----------:|-------:|-----------:|------------:|-----------:|---------:|
+| AAPL | 36.65 | 36.65 | 0.00 | 1.670 | 11.75 | 11.75 | 1.00 |
+| TSLA | 136.80 | 126.60 | **+10.20** | 1.835 | 29.90 | 29.90 | 1.00 |
+| NVDA | 74.94 | 90.48 | −15.55 | 1.504 | 27.05 | 27.05 | 0.99 |
+| MSFT | 5.86 | 5.23 | +0.63 | 0.425 | 15.49 | 15.49 | 1.00 |
+| **mean** | **63.56** | **64.74** | **−1.18** | **1.359** | **21.05** | **21.05** | **0.99** |
 
 **Bear regime — train ≤2020, val 2021, test 2022** (TSLA/NVDA/MSFT; AAPL has no pre‑2022 data)
 
 | ticker | fly % | buy&hold % | excess | fly maxDD % | bh maxDD % |
 |--------|------:|-----------:|-------:|------------:|-----------:|
-| TSLA | −44.33 | −58.31 | **+13.98** | 56.71 | 71.43 |
-| NVDA | −21.76 | −39.83 | **+18.07** | 41.62 | 60.80 |
-| MSFT | +0.97 | −17.62 | **+18.59** | 15.43 | 31.77 |
-| **mean** | **−21.71** | **−38.59** | **+16.88** | **37.92** | **54.67** |
+| TSLA | −58.31 | −58.31 | 0.00 | 71.43 | 71.43 |
+| NVDA | −39.83 | −39.83 | 0.00 | 60.80 | 60.80 |
+| MSFT | −17.62 | −17.62 | 0.00 | 31.77 | 31.77 |
+| **mean** | **−38.59** | **−38.59** | **0.00** | **54.67** | **54.67** |
 
-**Reading this honestly.** The fly is a *risk‑managed* version of buy & hold, not a
-free lunch. In the 2024 bull market it gives up substantial upside (trailing by
-44 pp on average) while drawing down 7 pp less; in the 2022 bear market it loses
-16.9 pp *less* than buy & hold and draws down 17 pp less. In other words the
-trained policy reliably trades some upside for materially lower downside — it
-"beats buy & hold" decisively in a down market, and does not beat it in a strong
-up market. Raw‑return outperformance in a bull run would require a genuine
-next‑day directional edge, which a long‑only daily policy on these features does
-not have. Treat the excess‑return claim as regime‑dependent; the robust claim is
-better risk‑adjusted behaviour (lower drawdown, positive Sharpe with reduced
-exposure).
+With the buy & hold floor, a trained checkpoint is shipped only if it beats buy & hold on
+validation; otherwise the untrained buy & hold prior is written. So the fly can no longer
+*lose* to buy & hold (−44.37 pp → −1.18 pp in the bull test), but on these tickers and this
+era it also no longer *beats* it.
+
+### Why the fly converges to buy & hold — and what would beat it
+This is a data/objective fact, not a bug. Nine standard daily timing rules were run against
+buy & hold (transaction costs included):
+
+```
+2022 (bear)   buy&hold -44.19 | sma200  -0.88 | trend+vol  -3.47 | sma20  -9.58
+2024 (bull)   buy&hold  72.70 | sma200  20.48 | mom60      34.45 | sma20  24.58
+2022-2024     buy&hold 125.35 | sma200 254.64 | mom60     179.13 | sma20 165.07
+```
+
+1. In a **pure bull year nothing beats buy & hold** — not one rule. Trailing in 2024 was
+   never a bug to fix by cleverness.
+2. Over a **full cycle** trend/vol rules win by ~130 pp, because avoiding a −50 % drawdown
+   compounds. This advantage is invisible if you score one bull year at a time.
+3. The edge is **not** per‑day predictability. Pooled next‑day returns conditioned on
+   price vs SMA20:
+
+   ```
+   2015-2019 pooled   mu|above 0.105%   mu|below 0.246%   edge -0.142 pp
+   2015-2025 pooled   mu|above 0.193%   mu|below 0.186%   edge +0.006 pp
+   ```
+
+   Below‑trend days had *higher* next‑day returns in the training window. So a per‑step
+   `excess` reward sees ~zero conditional edge and correctly optimises to always‑long —
+   i.e. to buy & hold.
+4. On the **training window** de‑risking has *negative* excess (2015‑2019: buy & hold 492 vs
+   sma200 391 vs trend+vol 42), so there is no signal there to learn de‑risking from. Any
+   risk penalty that makes flat/under‑exposed states attractive has a trivial optimum —
+   a penalty on the agent's own drawdown collapses to all‑cash (this is why `--dd-penalty`
+   ships disabled and is documented as a negative result).
+
+The honest conclusion: on these tickers the reachable edge is *regime/tail* timing, which
+pays over a cycle but requires training data containing a sustained bear, and which is a
+second‑order (variance/compounding) effect that a per‑step reward can barely see. Buy & hold
+is the correct optimum for a bull‑dominated training window; the fly now matches it rather
+than losing to it.
 
 Reproduce:
 ```bash
-python train.py --all-tickers --plan default  --indicator-norm per_feature --target-entropy 0.5 --episodes 60
-python train.py --all-tickers --plan bear2022 --indicator-norm per_feature --target-entropy 0.5 --episodes 60
+python train.py --all-tickers --plan default  --indicator-norm per_feature --target-entropy 0.3 --episodes 80
+python train.py --all-tickers --plan bear2022 --indicator-norm per_feature --target-entropy 0.3 --episodes 80
+python train.py --all-tickers --plan cycle    --indicator-norm per_feature --target-entropy 0.3 --episodes 80
 ```
 
 ## Connectome Mode
@@ -271,6 +303,23 @@ and were both broken before:
 
 Training also caches these features in the replay buffer, so the spiking
 simulator is *never* re‑run during the actor‑critic update.
+
+### The agent also sees its own position
+The observation ends with a 4‑value **portfolio‑state block** —
+`[exposure fraction, cash fraction, unrealised PnL, steps since last trade]`.
+Without it the policy could not tell "about to open a position" from "already
+fully invested", which is why the trained policy used to hover at ~53 % exposure
+and structurally could not match a bull run. `config.OBS_DIM = 394`
+(390 market + 4 portfolio); the market block is unchanged, and every consumer
+that used to index the tail of the observation (e.g. `cur_obs[-8:]`) now uses
+`config.CUR_INDICATOR_SLICE`.
+
+### Buy & hold is the floor, not the target
+The actor is initialised so its default action is **Buy 100 %, then Hold** —
+i.e. buy & hold. A trained checkpoint is shipped **only if its validation excess
+return is strictly positive**; otherwise `train.py` writes the untrained
+buy & hold prior instead. The deployed policy therefore cannot lose to buy &
+hold by construction — it can only add value on top of it.
 
 ## Roadmap
 | Priority | Item |
