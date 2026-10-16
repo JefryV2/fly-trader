@@ -59,3 +59,40 @@ def test_baseline_buy_hold_buys_then_holds():
     assert p[3] == 1.0
     p = baseline_probs("buy_hold", obs, shares=1.0, cash=0.0, prev_action=3)
     assert p[0] == 1.0
+
+
+def test_compare_on_env_runs_all_baselines():
+    from config import DATA_DIR
+    from env import FlyTradeEnv
+    from strategy import compare_on_env
+
+    def factory():
+        return FlyTradeEnv(DATA_DIR / "AAPL_daily.csv", window_size=30,
+                           start_date="2024-01-01", end_date="2024-06-30")
+
+    res = compare_on_env(factory, None, include_legacy=False)
+    assert set(res.keys()) == {"buy_hold", "momentum", "random"}
+    for m in res.values():
+        assert "total_return_pct" in m
+        assert "sharpe" in m
+        assert "trades" in m
+        assert m["steps"] > 0
+
+
+def test_compare_on_env_buy_hold_matches_price_ratio():
+    """buy&hold's return should closely track the raw close-price ratio."""
+    from config import DATA_DIR
+    from env import FlyTradeEnv, _load_ohlcv
+    from strategy import compare_on_env
+
+    start, end = "2024-01-01", "2024-06-30"
+    s = _load_ohlcv(DATA_DIR / "AAPL_daily.csv").loc[start:end]["Close"]
+    raw = (s.iloc[-2] / s.iloc[29] - 1) * 100  # env trades on window-end close
+
+    def factory():
+        return FlyTradeEnv(DATA_DIR / "AAPL_daily.csv", window_size=30,
+                           start_date=start, end_date=end)
+
+    bh = compare_on_env(factory, None, include_legacy=False)["buy_hold"]
+    # allow for the 0.1% buy cost and the env's final-bar off-by-one
+    assert abs(bh["total_return_pct"] - raw) < 2.0

@@ -45,13 +45,25 @@ REGION_RATIOS = {
 REGION_ORDER = ["AL", "KC", "CX", "DAN", "MBON"]
 
 # ── Default train / validation / test split (temporal, no leakage) ─────────
-# Data on disk currently covers 2022-01-03 .. 2024-12-31.
+# NOTE: the on-disk data files do NOT share a date range:
+#   * AAPL_daily.csv         2022-01-03 .. 2024-12-31 (~753 rows)
+#   * TSLA/NVDA/MSFT_daily   2015-01-02 .. 2025-12-30 (~2765 rows)
+# Training/evaluating on the FULL file therefore reports ~11-year buy-and-hold
+# returns for TSLA/NVDA/MSFT (e.g. TSLA ~+3000%, NVDA ~+38000%) while AAPL is
+# only a 3-year window — the two are not comparable.
+# These splits give every ticker the same held-out TEST window (2024) and the
+# same VAL window (2023 H2); TRAIN uses everything before the val window that
+# the file actually contains.
 SPLITS = {
-    "train": ("2022-01-01", "2023-06-30"),
+    "train": ("2015-01-01", "2023-06-30"),
     "val":   ("2023-07-01", "2023-12-31"),
     "test":  ("2024-01-01", "2024-12-31"),
 }
 TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]
+
+# Defaults for the API (server.py). Training must not see the test window.
+SERVER_TRAIN_SPLIT = "train"
+SERVER_EVAL_SPLIT = "test"
 
 # ── Action-masking presets ─────────────────────────────────────────────────
 # These preserve the exact per-site behaviour that was previously copy-pasted

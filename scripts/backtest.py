@@ -28,7 +28,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,21 +36,7 @@ sys.path.insert(0, str(ROOT))
 from config import CHECKPOINT_DIR, DATA_DIR, SPLITS, TICKERS  # noqa: E402
 from env import FlyTradeEnv  # noqa: E402
 from fly_brain import FlyBrainAgent  # noqa: E402
-from strategy import baseline_probs, run_episode  # noqa: E402
-
-
-def make_fly_prob_fn(agent: FlyBrainAgent):
-    """Wrap the agent so it lives behind the shared run_episode interface."""
-    def prob_fn(obs, _prev_action, _shares, _cash):
-        _action, probs, _value, _spikes = agent.select_action(obs, reward=0.0, deterministic=False)
-        return np.asarray(probs, dtype=np.float64)
-    return prob_fn
-
-
-def make_baseline_prob_fn(name: str):
-    def prob_fn(obs, _prev_action, shares, cash):
-        return baseline_probs(name, obs, shares=shares, cash=cash, prev_action=_prev_action)
-    return prob_fn
+from strategy import compare_on_env  # noqa: E402
 
 
 def load_agent(args, obs_dim, device="cpu"):
@@ -109,31 +94,14 @@ def evaluate_ticker(agent, ticker, split, args):
         print(f"  !! {ticker}/{split}: only {env_probe.n_steps} steps, skipping")
         return None
 
-    strategies = {"fly_honest": ("honest", make_fly_prob_fn(agent))}
-    strategies["fly_legacy"] = ("live", make_fly_prob_fn(agent))
-    strategies["buy_hold"] = ("honest", make_baseline_prob_fn("buy_hold"))
-    strategies["momentum"] = ("honest", make_baseline_prob_fn("momentum"))
-    strategies["random"] = ("honest", make_baseline_prob_fn("random"))
-
-    rows = {}
-    for name, (preset, fn) in strategies.items():
-        # Reset the fly simulator for a clean comparison before each rollout.
-        if name.startswith("fly_"):
-            agent.reset()
-        env = build_env()
-        det = args.deterministic
-        # A uniform-random policy must sample; argmax of a flat vector is just
-        # Hold, which would make the baseline meaningless.
-        if name == "random":
-            det = False
-        eps = 0.0 if det else args.epsilon
-        metrics = run_episode(
-            env, fn, mask_preset=preset,
-            deterministic=det, temperature=args.temperature,
-            epsilon=eps, seed=args.seed,
-        )
-        rows[name] = metrics
-    return rows
+    return compare_on_env(
+        build_env,
+        agent,
+        deterministic=args.deterministic,
+        seed=args.seed,
+        include_legacy=True,
+        include_baselines=True,
+    )
 
 
 def print_table(ticker, split, rows):

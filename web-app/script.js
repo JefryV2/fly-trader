@@ -186,7 +186,7 @@ async function apiTrainBatch() {
       lastTrainData = d;
       totalEpisodes = d.total_episodes;
       qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
-      toast(`⚡ Trained 25 Episodes! Avg Return: ${d.avg_return_pct > 0 ? '+' : ''}${d.avg_return_pct}%`, 'buy-toast');
+      toast(`⚡ Trained 25 Episodes! Median: ${d.median_return_pct > 0 ? '+' : ''}${d.median_return_pct}% · Held-out: ${(d.heldout && d.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (d.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + d.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
       // Auto-open the lab to show results
       openLabModal(d);
       await apiReset();
@@ -234,7 +234,7 @@ async function apiRunSimulations() {
     }
     
     if (totalResults) {
-      toast(`⚡ Completed 5 Simulations! Avg Return: ${totalResults.avg_return_pct > 0 ? '+' : ''}${totalResults.avg_return_pct}%`, 'buy-toast');
+      toast(`⚡ Completed 5 Simulations! Median: ${totalResults.median_return_pct > 0 ? '+' : ''}${totalResults.median_return_pct}% · Held-out: ${(totalResults.heldout && totalResults.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (totalResults.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + totalResults.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
       // Auto-open the lab to show results
       openLabModal(totalResults);
       await apiReset();
@@ -1456,6 +1456,7 @@ function populateLab(d) {
   // KPI cards
   const avgRet = d.avg_return_pct || 0;
   const bestRet = d.best_return_pct || 0;
+  const medianRet = d.median_return_pct;
   const p = d.plasticity || {};
   const ve = d.valence_evolution || {};
 
@@ -1465,7 +1466,36 @@ function populateLab(d) {
     labAvgRet.className = `kpi-value ${avgRet >= 0 ? 'pos' : 'neg'}`;
   }
   const labBestRet = $('lab-best-ret');
-  if (labBestRet) labBestRet.textContent = `Best: ${bestRet >= 0 ? '+' : ''}${bestRet.toFixed(2)}%`;
+  if (labBestRet) {
+    // Best is the MAX over stochastic in-sample episodes; median is the honest one.
+    const medTxt = (medianRet === undefined || medianRet === null)
+      ? '' : `Median: ${medianRet >= 0 ? '+' : ''}${medianRet.toFixed(2)}% · `;
+    labBestRet.textContent = `${medTxt}Best: ${bestRet >= 0 ? '+' : ''}${bestRet.toFixed(2)}%`;
+  }
+
+  // Held-out (out-of-sample) result — this is the number that matters.
+  const ho = d.heldout || {};
+  const labHo = $('lab-heldout-ret');
+  if (labHo) {
+    const v = ho.mean_fly_return_pct;
+    if (v === undefined) {
+      labHo.textContent = '—';
+      labHo.className = 'kpi-value';
+    } else {
+      labHo.textContent = `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+      labHo.className = `kpi-value ${v >= 0 ? 'pos' : 'neg'}`;
+    }
+  }
+  const labHoSub = $('lab-heldout-sub');
+  if (labHoSub) {
+    if (ho.fly_excess_vs_buyhold_pct === undefined) {
+      labHoSub.textContent = 'vs buy & hold: —';
+    } else {
+      const x = ho.fly_excess_vs_buyhold_pct;
+      const range = ho.date_range ? `${ho.date_range[0]}..${ho.date_range[1]}` : '';
+      labHoSub.textContent = `vs buy & hold: ${x >= 0 ? '+' : ''}${x.toFixed(2)}% (${range})`;
+    }
+  }
 
   const labLtp = $('lab-ltp-ltd');
   if (labLtp) labLtp.textContent = `${p.ltp_count || 0} LTP / ${p.ltd_count || 0} LTD`;
@@ -1794,11 +1824,16 @@ function renderSimulationHistoryUI() {
   // Aggregate KPIs
   const totalRuns = simulationHistory.length;
   const totalEps = simulationHistory.reduce((sum, r) => sum + (r.episodes || 0), 0);
-  const returns = simulationHistory.map(r => r.avg_return_pct).filter(v => v !== undefined && !isNaN(v));
-  const bestReturns = simulationHistory.map(r => r.best_return_pct).filter(v => v !== undefined && !isNaN(v));
+  // Aggregate the HELD-OUT metrics (the trustworthy ones), not the in-sample max.
+  const hoRet = simulationHistory
+    .map(r => (r.heldout || {}).mean_fly_return_pct)
+    .filter(v => v !== undefined && !isNaN(v));
+  const hoExcess = simulationHistory
+    .map(r => (r.heldout || {}).fly_excess_vs_buyhold_pct)
+    .filter(v => v !== undefined && !isNaN(v));
 
-  const allTimeBest = bestReturns.length > 0 ? Math.max(...bestReturns) : 0;
-  const avgReturn = returns.length > 0 ? (returns.reduce((a, b) => a + b, 0) / returns.length) : 0;
+  const heldoutMean = hoRet.length > 0 ? (hoRet.reduce((a, b) => a + b, 0) / hoRet.length) : 0;
+  const excessMean = hoExcess.length > 0 ? (hoExcess.reduce((a, b) => a + b, 0) / hoExcess.length) : 0;
 
   const aggRuns = $('sim-agg-runs');
   if (aggRuns) aggRuns.textContent = totalRuns;
@@ -1806,13 +1841,13 @@ function renderSimulationHistoryUI() {
   if (aggEps) aggEps.textContent = totalEps;
   const aggBest = $('sim-agg-best');
   if (aggBest) {
-    aggBest.textContent = `${allTimeBest >= 0 ? '+' : ''}${allTimeBest.toFixed(1)}%`;
-    aggBest.className = `sim-kpi-val ${allTimeBest >= 0 ? 'pos' : 'neg'}`;
+    aggBest.textContent = `${heldoutMean >= 0 ? '+' : ''}${heldoutMean.toFixed(1)}%`;
+    aggBest.className = `sim-kpi-val ${heldoutMean >= 0 ? 'pos' : 'neg'}`;
   }
   const aggAvg = $('sim-agg-avg');
   if (aggAvg) {
-    aggAvg.textContent = `${avgReturn >= 0 ? '+' : ''}${avgReturn.toFixed(1)}%`;
-    aggAvg.className = `sim-kpi-val ${avgReturn >= 0 ? 'pos' : 'neg'}`;
+    aggAvg.textContent = `${excessMean >= 0 ? '+' : ''}${excessMean.toFixed(1)}%`;
+    aggAvg.className = `sim-kpi-val ${excessMean >= 0 ? 'pos' : 'neg'}`;
   }
 
   // Render Full Run List in #tab-sims
@@ -1831,8 +1866,13 @@ function renderSimulationHistoryUI() {
       [...simulationHistory].reverse().forEach((run) => {
         const card = document.createElement('div');
         card.className = 'sim-card';
-        const isPos = (run.avg_return_pct || 0) >= 0;
+        const isPos = (run.median_return_pct !== undefined ? run.median_return_pct : run.avg_return_pct || 0) >= 0;
         const bestRet = run.best_return_pct || 0;
+        const medianRet = (run.median_return_pct !== undefined && run.median_return_pct !== null)
+          ? run.median_return_pct : (run.avg_return_pct || 0);
+        const ho = run.heldout || {};
+        const hoRet = ho.mean_fly_return_pct;
+        const hoExcess = ho.fly_excess_vs_buyhold_pct;
         const epData = run.episodes_data || [];
 
         card.innerHTML = `
@@ -1842,7 +1882,7 @@ function renderSimulationHistoryUI() {
               <span class="sim-timestamp">${run.timestamp || ''}</span>
             </div>
             <span class="sim-return-badge ${isPos ? 'pos' : 'neg'}">
-              ${isPos ? '+' : ''}${(run.avg_return_pct || 0).toFixed(2)}%
+              ${isPos ? '+' : ''}${medianRet.toFixed(2)}% <span style="opacity:.6;font-weight:400;font-size:.85em">median</span>
             </span>
           </div>
           <div class="sim-meta-row">
@@ -1851,16 +1891,20 @@ function renderSimulationHistoryUI() {
               <span class="sim-meta-val">${run.episodes}</span>
             </div>
             <div class="sim-meta-item">
+              <span class="sim-meta-lbl">Median</span>
+              <span class="sim-meta-val ${medianRet >= 0 ? 'pos' : 'neg'}">${medianRet >= 0 ? '+' : ''}${medianRet.toFixed(1)}%</span>
+            </div>
+            <div class="sim-meta-item">
               <span class="sim-meta-lbl">Best Ep</span>
               <span class="sim-meta-val ${bestRet >= 0 ? 'pos' : 'neg'}">${bestRet >= 0 ? '+' : ''}${bestRet.toFixed(1)}%</span>
             </div>
             <div class="sim-meta-item">
-              <span class="sim-meta-lbl">Win Rate</span>
-              <span class="sim-meta-val">${run.avg_win_rate || '—'}%</span>
+              <span class="sim-meta-lbl">Held-out</span>
+              <span class="sim-meta-val ${(hoRet || 0) >= 0 ? 'pos' : 'neg'}">${hoRet === undefined ? '—' : (hoRet >= 0 ? '+' : '') + hoRet.toFixed(1) + '%'}</span>
             </div>
             <div class="sim-meta-item">
-              <span class="sim-meta-lbl">Trades</span>
-              <span class="sim-meta-val">${run.avg_trades || '—'}</span>
+              <span class="sim-meta-lbl">vs Buy&amp;Hold</span>
+              <span class="sim-meta-val ${(hoExcess || 0) >= 0 ? 'pos' : 'neg'}">${hoExcess === undefined ? '—' : (hoExcess >= 0 ? '+' : '') + hoExcess.toFixed(1) + '%'}</span>
             </div>
           </div>
           <div class="sim-card-actions">
@@ -1875,6 +1919,8 @@ function renderSimulationHistoryUI() {
                 <thead>
                   <tr>
                     <th>Ep</th>
+                    <th>Ticker</th>
+                    <th>Period</th>
                     <th>Return</th>
                     <th>Sharpe</th>
                     <th>Win%</th>
@@ -1885,6 +1931,8 @@ function renderSimulationHistoryUI() {
                   ${epData.map(e => `
                     <tr>
                       <td>#${e.episode}</td>
+                      <td>${e.ticker || '—'}</td>
+                      <td style="opacity:.7;font-size:.85em">${(e.start_date && e.end_date) ? e.start_date + ' → ' + e.end_date : (e.steps || '—')}</td>
                       <td style="color:${e.return_pct >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:600">
                         ${e.return_pct >= 0 ? '+' : ''}${e.return_pct}%
                       </td>
@@ -1939,11 +1987,14 @@ function renderSimulationHistoryUI() {
       [...simulationHistory].slice(-5).reverse().forEach(run => {
         const item = document.createElement('div');
         item.className = 'sim-mini-item';
-        const isPos = (run.avg_return_pct || 0) >= 0;
+        const medRet = (run.median_return_pct !== undefined && run.median_return_pct !== null)
+          ? run.median_return_pct : (run.avg_return_pct || 0);
+        const isPos = medRet >= 0;
+        const hoX = (run.heldout || {}).fly_excess_vs_buyhold_pct;
         item.innerHTML = `
-          <span><b>Run #${run.run}</b> <small style="color:var(--txt-dim)">(${run.episodes} eps)</small></span>
+          <span><b>Run #${run.run}</b> <small style="color:var(--txt-dim)">(${run.episodes} eps${hoX !== undefined ? ' · held-out ' + (hoX >= 0 ? '+' : '') + hoX.toFixed(1) + '% vs B&H' : ''})</small></span>
           <span style="color:${isPos ? 'var(--green)' : 'var(--red)'};font-weight:600">
-            ${isPos ? '+' : ''}${(run.avg_return_pct || 0).toFixed(2)}%
+            ${isPos ? '+' : ''}${medRet.toFixed(2)}%
           </span>
         `;
         item.addEventListener('click', () => {

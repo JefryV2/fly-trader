@@ -162,6 +162,24 @@ def baseline_probs(name: str, obs, *, shares: float, cash: float, prev_action: i
     return p
 
 
+def baseline_prob_fn(name: str):
+    """Wrap ``baseline_probs`` into the ``prob_fn(obs, prev, shares, cash)`` contract."""
+    def prob_fn(obs, _prev_action, shares, cash):
+        return baseline_probs(name, obs, shares=shares, cash=cash, prev_action=_prev_action)
+    return prob_fn
+
+
+def fly_prob_fn(agent):
+    """Wrap a ``FlyBrainAgent`` into the ``prob_fn(obs, prev, shares, cash)`` contract.
+
+    The policy's own validity/confidence masking is *not* applied here; the
+    caller chooses a mask preset via ``run_episode``.
+    """
+    def prob_fn(obs, _prev_action, _shares, _cash):
+        return np.asarray(agent.select_action(obs, reward=0.0, deterministic=False)[1], dtype=np.float64)
+    return prob_fn
+
+
 # ── Metrics ────────────────────────────────────────────────────────────────
 def performance_metrics(portfolio_history, *, initial_cash: float, periods_per_year: int = 252) -> dict:
     vals = np.asarray([v for v in portfolio_history if v is not None], dtype=np.float64)
@@ -246,3 +264,45 @@ def run_episode(
     }
     metrics["portfolio_history"] = history
     return metrics
+
+
+def compare_on_env(
+    env_factory,
+    agent=None,
+    *,
+    deterministic: bool = True,
+    seed: int = 0,
+    include_legacy: bool = True,
+    include_baselines: bool = True,
+) -> dict:
+    """Run the fly policy (+ optional legacy mask) and baselines on one env.
+
+    ``env_factory()`` must return a *fresh* ``FlyTradeEnv`` (the same
+    train/val/test slice) so every strategy starts from identical state.
+    Returns ``{strategy_name: metrics}`` and never mutates the agent's learned
+    weights (it does reset the simulator between roll-outs).
+    """
+    results = {}
+    if agent is not None:
+        agent.reset()
+        results["fly_honest"] = run_episode(
+            env_factory(), fly_prob_fn(agent), mask_preset="honest",
+            deterministic=deterministic, seed=seed,
+        )
+        if include_legacy:
+            agent.reset()
+            results["fly_legacy"] = run_episode(
+                env_factory(), fly_prob_fn(agent), mask_preset="live",
+                deterministic=deterministic, seed=seed,
+            )
+    if include_baselines:
+        for name in ("buy_hold", "momentum"):
+            results[name] = run_episode(
+                env_factory(), baseline_prob_fn(name), mask_preset="honest",
+                deterministic=True, seed=seed,
+            )
+        results["random"] = run_episode(
+            env_factory(), baseline_prob_fn("random"), mask_preset="honest",
+            deterministic=False, seed=seed,
+        )
+    return results

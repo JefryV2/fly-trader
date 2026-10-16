@@ -29,9 +29,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from config import SPLITS, SERVER_EVAL_SPLIT, SERVER_TRAIN_SPLIT
 from env import FlyTradeEnv
 from fly_brain import FlyBrainAgent
-from strategy import apply_preset
+from strategy import apply_preset, baseline_prob_fn, compare_on_env, run_episode
 
 # ── Brain Atlas Data Loader ────────────────────────────────────────────────
 def _load_brain_atlas():
@@ -270,6 +271,87 @@ def _compute_sharpe(values):
     val = mu / (std + 1e-9) * math.sqrt(252)
     return round(float(val), 4) if math.isfinite(val) else 0.0
 
+# ── Train / validation / test splitting helpers ────────────────────────────
+DATA_DIR = DATA_PATH.parent
+
+
+def _data_path_for(ticker: str) -> Path:
+    p = DATA_DIR / f"{ticker}_daily.csv"
+    return p if p.is_file() else DATA_PATH
+
+
+def _split_bounds(split: str):
+    if split not in SPLITS:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown split '{split}'; expected one of {list(SPLITS)}")
+    return SPLITS[split]
+
+
+def _make_env(ticker: str, split: str, *, enable_sl_tp: bool, window_size: int = 30) -> FlyTradeEnv:
+    start, end = _split_bounds(split)
+    return FlyTradeEnv(
+        _data_path_for(ticker), window_size=window_size,
+        enable_sl_tp=enable_sl_tp, start_date=start, end_date=end,
+    )
+
+
+def _simulator_state_snapshot():
+    return (brain.simulator.V.copy(), brain.simulator.last_spikes.copy(),
+            getattr(brain.simulator, "_inh", 0.0), brain.simulator.dopamine_level,
+            brain.training)
+
+
+def _restore_simulator_state(snap):
+    v, spikes, inh, dopamine, was_training = snap
+    brain.simulator.V = v
+    brain.simulator.last_spikes = spikes
+    if hasattr(brain.simulator, "_inh"):
+        brain.simulator._inh = inh
+    brain.simulator.dopamine_level = dopamine
+    brain.train(was_training)
+
+
+def _heldout_report(tickers, split: str, *, seed: int = 0) -> dict:
+    """Out-of-sample evaluation of the frozen policy vs baselines on ``split``.
+
+    Uses the same masking/selection code path as everything else
+    (``strategy.compare_on_env``) and does NOT touch the policy weights or the
+    live simulator state.
+    """
+    snap = _simulator_state_snapshot()
+    report = {"split": split, "date_range": list(SPLITS[split]), "per_ticker": {}}
+    try:
+        brain.eval()
+        for t in tickers:
+            def env_factory(t=t):
+                return _make_env(t, split, enable_sl_tp=False)
+            try:
+                res = compare_on_env(env_factory, brain, deterministic=True, seed=seed,
+                                     include_legacy=False, include_baselines=True)
+            except Exception as e:  # pragma: no cover - defensive
+                report["per_ticker"][t] = {"error": str(e)}
+                continue
+            report["per_ticker"][t] = {
+                name: {
+                    "return_pct": round(m["total_return_pct"], 2),
+                    "sharpe": round(m["sharpe"], 4),
+                    "max_drawdown_pct": round(m["max_drawdown_pct"], 2),
+                    "trades": m["trades"],
+                }
+                for name, m in res.items()
+            }
+    finally:
+        _restore_simulator_state(snap)
+
+    fly = [v["fly_honest"]["return_pct"] for v in report["per_ticker"].values() if "fly_honest" in v]
+    bh = [v["buy_hold"]["return_pct"] for v in report["per_ticker"].values() if "buy_hold" in v]
+    report["mean_fly_return_pct"] = round(float(np.mean(fly)), 2) if fly else 0.0
+    report["mean_buyhold_return_pct"] = round(float(np.mean(bh)), 2) if bh else 0.0
+    report["fly_excess_vs_buyhold_pct"] = round(
+        report["mean_fly_return_pct"] - report["mean_buyhold_return_pct"], 2)
+    return report
+
+
 def _get_region_breakdown(spikes_1024, N_NEURONS=1024):
     """Summarizes spiking activity across anatomical Drosophila lobes."""
     al_end = int(round(N_NEURONS * 128 / 1024))
@@ -470,6 +552,7 @@ def take_step(payload: ActionPayload):
 
 class TrainBatchPayload(BaseModel):
     episodes: int = 25
+    split: str = SERVER_TRAIN_SPLIT
 
 @app.post("/train_batch")
 def train_batch(payload: TrainBatchPayload):
@@ -486,18 +569,18 @@ def train_batch(payload: TrainBatchPayload):
     episodes_data = []
     returns = []
     losses = []
+    split = payload.split
+    _split_bounds(split)  # validate early (raises 400 on bad split)
 
     for ep in range(n_episodes):
         # Reset reward normalizer per episode for stable learning
         _reward_norm.reset()
         
-        # Curriculum learning: start with volatile assets, progress to stable ones
+        # Curriculum learning: cycle through the assets
         ticker = MULTI_ASSET_TICKERS[ep % len(MULTI_ASSET_TICKERS)]
-        ticker_path = Path(__file__).parent.parent / "data" / f"{ticker}_daily.csv"
-        if ticker_path.is_file():
-            train_env = FlyTradeEnv(ticker_path, window_size=30, enable_sl_tp=True)
-        else:
-            train_env = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=True)
+        # Train on the requested time slice only (default: everything before the
+        # held-out val/test windows). Never trains on the test split.
+        train_env = _make_env(ticker, split, enable_sl_tp=True)
         
         cur_obs, _ = train_env.reset()
         ep_history = [train_env.initial_cash]
@@ -600,8 +683,15 @@ def train_batch(payload: TrainBatchPayload):
             _save_best_checkpoint(ep_sharpe)
 
         returns.append(ep_ret)
+        ep_start = str(train_env.data.index.min().date())
+        ep_end = str(train_env.data.index.max().date())
         ep_data = {
             "episode": _total_episodes_trained + ep + 1,
+            "ticker": ticker,
+            "split": split,
+            "start_date": ep_start,
+            "end_date": ep_end,
+            "steps": step_count,
             "return_pct": round(ep_ret, 2),
             "win_rate": ep_winrate,
             "sharpe": ep_sharpe,
@@ -613,6 +703,7 @@ def train_batch(payload: TrainBatchPayload):
         # Update learning history for performance graphs
         _learning_history.append({
             "episode": _total_episodes_trained + ep + 1,
+            "ticker": ticker,
             "return_pct": round(ep_ret, 2),
             "sharpe": ep_sharpe,
             "loss": round(float(np.mean(losses[-5:])) if losses else 0.0, 5),
@@ -633,6 +724,12 @@ def train_batch(payload: TrainBatchPayload):
     avg_return = float(np.mean(returns)) if returns else 0.0
     best_return = float(np.max(returns)) if returns else 0.0
     worst_return = float(np.min(returns)) if returns else 0.0
+    median_return = float(np.median(returns)) if returns else 0.0
+
+    # Out-of-sample evaluation on the held-out split (never trained on).
+    # This is the honest number: it is NOT the max over stochastic in-sample
+    # episodes, and it is measured over the same window for every ticker.
+    heldout = _heldout_report(MULTI_ASSET_TICKERS, SERVER_EVAL_SPLIT, seed=0)
 
     # Save latest checkpoint
     _save_checkpoint()
@@ -645,12 +742,19 @@ def train_batch(payload: TrainBatchPayload):
         "timestamp": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "episodes": n_episodes,
         "total_episodes_after": _total_episodes_trained,
+        "train_split": split,
+        "train_date_range": list(SPLITS[split]),
         "avg_return_pct": round(avg_return, 2),
+        "median_return_pct": round(median_return, 2),
         "best_return_pct": round(best_return, 2),
         "worst_return_pct": round(worst_return, 2),
         "avg_win_rate": round(float(np.mean([ep["win_rate"] for ep in episodes_data])) if episodes_data else 0.0, 1),
         "avg_trades": round(float(np.mean([ep["trades"] for ep in episodes_data])) if episodes_data else 0.0, 1),
         "avg_loss": round(avg_loss, 5),
+        # NOTE: best_return_pct is the MAX over stochastic in-sample episodes
+        # (each episode samples a different ticker and action noise). Median and
+        # the held-out block below are the trustworthy figures.
+        "heldout": heldout,
         "plasticity": {
             "ltp_count": ltp_count,
             "ltd_count": ltd_count,
@@ -672,8 +776,12 @@ def train_batch(payload: TrainBatchPayload):
         "run": run_record["run"],
         "episodes_trained": n_episodes,
         "total_episodes": _total_episodes_trained,
+        "train_split": split,
         "avg_return_pct": round(avg_return, 2),
+        "median_return_pct": round(median_return, 2),
         "best_return_pct": round(best_return, 2),
+        "worst_return_pct": round(worst_return, 2),
+        "heldout": heldout,
         "avg_loss": round(avg_loss, 5),
         "episodes_data": episodes_data,
         "plasticity": run_record["plasticity"],
@@ -684,6 +792,7 @@ class EvalEpisodePayload(BaseModel):
     ticker: str = "AAPL"
     deterministic: bool = True
     enable_sl_tp: bool = True
+    split: str = SERVER_EVAL_SPLIT
 
 @app.post("/eval_episode")
 def eval_episode(payload: EvalEpisodePayload):
@@ -691,11 +800,7 @@ def eval_episode(payload: EvalEpisodePayload):
     Run an offline-style full evaluation episode using the living brain in eval mode.
     Does not update policy weights or pollute the replay buffer.
     """
-    ticker_path = Path(__file__).parent.parent / "data" / f"{payload.ticker}_daily.csv"
-    if not ticker_path.is_file():
-        ticker_path = DATA_PATH
-
-    eval_env = FlyTradeEnv(ticker_path, window_size=30, enable_sl_tp=payload.enable_sl_tp)
+    eval_env = _make_env(payload.ticker, payload.split, enable_sl_tp=payload.enable_sl_tp)
     cur_obs, _ = eval_env.reset()
 
     # Save simulator state so live server session state is cleanly preserved
@@ -770,12 +875,24 @@ def eval_episode(payload: EvalEpisodePayload):
     wins = sum(1 for i in range(1, len(portfolio_history)) if portfolio_history[i] > portfolio_history[i-1])
     win_rate = round(wins / max(1, len(portfolio_history) - 1) * 100, 1)
 
+    # Reference benchmark: true buy & hold over the SAME window (no SL/TP, so it
+    # is a real buy-and-hold, not a stop-loss churn strategy).
+    bh_env = _make_env(payload.ticker, payload.split, enable_sl_tp=False)
+    bh = run_episode(bh_env, baseline_prob_fn("buy_hold"), mask_preset="honest",
+                     deterministic=True, seed=0)
+    buy_hold_pct = round(bh["total_return_pct"], 2)
+
     return {
         "status": "success",
         "ticker": payload.ticker,
+        "split": payload.split,
+        "start_date": str(eval_env.data.index.min().date()),
+        "end_date": str(eval_env.data.index.max().date()),
         "initial_portfolio": initial,
         "final_portfolio": round(final, 2),
         "return_pct": ret_pct,
+        "buy_hold_return_pct": buy_hold_pct,
+        "excess_vs_buyhold_pct": round(ret_pct - buy_hold_pct, 2),
         "sharpe": sharpe,
         "max_drawdown": max_dd,
         "win_rate": win_rate,

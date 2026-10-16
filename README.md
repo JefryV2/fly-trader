@@ -27,17 +27,29 @@ The pipeline:
 **Works**
 - Environment: 390‑dim observation (`30 × 5` OHLCV + `30 × 8` indicators),
   transaction costs, optional stop‑loss/take‑profit. Covered by `tests/`.
-- Data: daily OHLCV for AAPL / TSLA / NVDA / MSFT, **2022‑01‑03 → 2024‑12‑31**.
+- Data: daily OHLCV for AAPL / TSLA / NVDA / MSFT. **The files do not share a
+  date range**: AAPL is 2022-01-03 → 2024-12-31 (~753 rows) while
+  TSLA/NVDA/MSFT are 2015-01-02 → 2025-12-30 (~2,765 rows).
 - `train.py`: offline online‑AC trainer with a proper time split and
   validation‑based checkpoint selection. Runs end‑to‑end.
 - `scripts/backtest.py`: honest out‑of‑sample evaluation vs buy‑&‑hold,
   momentum and random baselines, all sharing one masking/selection code path.
 - `web-app/server.py`: FastAPI backend + Three.js front‑end demo. Boots, steps,
   trains and evaluates.
+- `/train_batch` trains on the **train split only** and reports **median +
+  held‑out (test)** results; `/eval_episode` is split‑aware and returns a
+  buy‑&‑hold reference.
 - One shared masking implementation (`strategy.apply_action_mask`) used by the
   API, the trainer and the backtest (previously four copy‑pasted variants).
 
 **Known limitations / caveats**
+- **Inconsistent data ranges.** Training/evaluating on the full file reports
+  ~11‑year buy‑and‑hold returns for TSLA/NVDA/MSFT (TSLA ≈ +3000%,
+  NVDA ≈ +38,700%) while AAPL is a 3‑year window — the two are not comparable.
+  That is the origin of the "3000% episode" number: it is roughly TSLA's own
+  move, and the reported `best_return_pct` was the **max over stochastic
+  in‑sample episodes**. Training now defaults to the train split and reporting
+  uses the median + a held‑out number instead of that max.
 - The cached `flywire_weights/connectome_weights.pkl` has **unverified
   provenance**. Rebuilding from the raw FlyWire files with the correct mapping
   yields only **1,130** synapses among the selected neurons, whereas the cached
@@ -90,8 +102,9 @@ python -m pip install -r requirements.txt
    ```bash
    python -m pytest tests -q
    ```
-2. **Train** (time‑split: train `2022‑01 → 2023‑06`, val `2023‑07 → 2023‑12`,
-   test `2024`), selecting the best checkpoint by validation Sharpe:
+2. **Train** (time‑split: train = everything before `2023‑07`, val
+   `2023‑07 → 2023‑12`, test `2024`), selecting the best checkpoint by
+   validation Sharpe:
    ```bash
    python train.py --ticker AAPL
    python train.py --all-tickers --episodes 40
@@ -114,6 +127,18 @@ trivial baselines that use the *same* accounting, masking and costs. On the
 2024 test year (a strong bull market for these tickers), buy‑&‑hold is a hard
 baseline, and the hand‑coded "buy‑forcing" heuristics currently *underperform*
 it — a useful, honest starting point.
+
+The API follows the same rule:
+- `POST /train_batch {"episodes": N, "split": "train"}` trains on the train split
+  and returns `median_return_pct` (not just the cherry‑picked `best_return_pct`)
+  plus a `heldout` block with per‑ticker fly vs buy‑&‑hold results on the test
+  split. Each episode records its `ticker` and date range.
+- `POST /eval_episode {"ticker": ..., "split": "test"}` is split‑aware and
+  returns `buy_hold_return_pct` and `excess_vs_buyhold_pct` for context.
+
+> A "3000%" training episode was **not** skill: TSLA/NVDA/MSFT files span
+> 2015‑2025 and the number was each asset's own buy‑and‑hold move, taken as the
+> max over stochastic in‑sample episodes. See the caveats above.
 
 Strategies compared:
 | name | description |
@@ -166,9 +191,11 @@ This writes source‑file SHA‑256 hashes, parameters and nnz alongside the mat
 | P0 | ✅ Working trainer with time split (`train.py`, `trainer.py`) |
 | P0 | ✅ Real tests (`tests/`) |
 | P0 | ✅ Fixed/auditable connectome builder (`scripts/rebuild_connectome.py`) |
+| P1 | ✅ Split-aware training/eval + honest (median/held-out) API reporting |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
 | P1 | Wire real cell‑type anatomy instead of index ranges |
 | P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |
+| P2 | Select the best checkpoint by held-out, not in-sample, performance |
 | P2 | Remove `flywire_data/` duplication; retire legacy scripts |
 
 ---
