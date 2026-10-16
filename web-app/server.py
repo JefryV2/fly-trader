@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from config import SPLITS, SERVER_EVAL_SPLIT, SERVER_TRAIN_SPLIT
 from env import FlyTradeEnv
 from fly_brain import FlyBrainAgent
-from strategy import apply_preset, baseline_prob_fn, compare_on_env, run_episode
+from strategy import apply_preset, baseline_prob_fn, baseline_probs, compare_on_env, run_episode
 
 # ── Brain Atlas Data Loader ────────────────────────────────────────────────
 def _load_brain_atlas():
@@ -129,6 +129,14 @@ SERVER_INDICATOR_NORM = os.environ.get("FLYBRAIN_INDICATOR_NORM", "per_feature")
 # upside in a pure bull run (see README, "Does the fly beat buy & hold?").
 # Off by default so the raw learned policy can be evaluated honestly.
 SERVER_REGIME_GATE = os.environ.get("FLYBRAIN_REGIME_GATE", "false").lower() == "true"
+# Deployed strategy. On the honest full-cycle test the learned policy only
+# narrowly beats buy & hold (+6pp), while the *pre-specified* 200-day trend
+# overlay beats it outright (+17pp) with a lower drawdown and a higher Sharpe
+# (see README, "cross-regime matrix"). So the max-return default is "trend200";
+# set FLYBRAIN_STRATEGY=fly to serve the raw learned policy instead, or
+# "buy_hold" / "momentum" for the other pre-specified rules.
+SERVER_STRATEGY = os.environ.get("FLYBRAIN_STRATEGY", "trend200").lower()
+RULE_STRATEGIES = {"trend200", "buy_hold", "momentum"}
 # Regime block layout appended to each observation by env._compute_regime_block:
 # [close/SMA200-1, close/SMA50-1, ann_vol20, vol20/vol60].
 REGIME_DIST200_IDX = -4
@@ -450,27 +458,47 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
     # If action is -1 or auto_brain, let the 1024-LIF Fly Brain decide autonomously!
     # 7 actions: 0=Hold, 1=Buy 25%, 2=Buy 50%, 3=Buy 100%, 4=Sell 25%, 5=Sell 50%, 6=Sell 100%
     if auto_brain or action < 0 or action > 6:
-        action, raw_action_probs, state_value, spikes_1024 = brain.select_action(obs, reward=_last_shaped_reward)
-        # Shared masking path (config.MASK_PRESETS['live']); see strategy.py.
-        # Heuristics are opt-in per preset so the policy can also be evaluated
-        # honestly (see scripts/backtest.py).
-        probs_arr = apply_preset(
-            raw_action_probs, "live",
-            shares=env.shares, cash=env.cash,
-            price=price, entry_price=getattr(env, "entry_price", 0.0),
-        ).astype(np.float32)
-        probs_arr = _apply_regime_gate(probs_arr, obs, env.shares)
+        # The fly brain always steps so the live visualisation/telemetry stays
+        # populated, even when a pre-specified rule is the deployed strategy.
+        _, raw_fly_probs, state_value, spikes_1024 = brain.select_action(obs, reward=_last_shaped_reward)
+
+        if SERVER_STRATEGY in RULE_STRATEGIES:
+            # Max-return pre-specified rule. Use the same minimal ("honest")
+            # mask as the offline evaluation — not the live heuristics — so live
+            # serving matches the backtest that produced the headline numbers.
+            raw_action_probs = baseline_probs(
+                SERVER_STRATEGY, obs,
+                shares=env.shares, cash=env.cash, prev_action=0,
+            )
+            probs_arr = apply_preset(
+                raw_action_probs, "honest",
+                shares=env.shares, cash=env.cash,
+                price=price, entry_price=getattr(env, "entry_price", 0.0),
+            ).astype(np.float32)
+        else:
+            # Shared masking path (config.MASK_PRESETS['live']); see strategy.py.
+            # Heuristics are opt-in per preset so the policy can also be
+            # evaluated honestly (see scripts/backtest.py).
+            raw_action_probs = np.asarray(raw_fly_probs, dtype=np.float64)
+            probs_arr = apply_preset(
+                raw_action_probs, "live",
+                shares=env.shares, cash=env.cash,
+                price=price, entry_price=getattr(env, "entry_price", 0.0),
+            ).astype(np.float32)
+            probs_arr = _apply_regime_gate(probs_arr, obs, env.shares)
         action_probs = probs_arr.tolist()
 
-        # Dynamic action sampling: temperature-scaled policy sampling avoids static argmax lock
-        if _total_episodes_trained > 5:
+        # A pre-specified rule is deterministic (its vector is a one-hot), so
+        # sample straight from it; the learned policy uses temperature sampling
+        # to avoid a static argmax lock.
+        if SERVER_STRATEGY in RULE_STRATEGIES or _total_episodes_trained <= 5:
+            action = int(np.random.choice(7, p=probs_arr))
+        else:
             temp = 0.65
             log_p = np.log(probs_arr + 1e-9) / temp
             exp_p = np.exp(log_p - np.max(log_p))
             sample_p = exp_p / np.sum(exp_p)
             action = int(np.random.choice(7, p=sample_p))
-        else:
-            action = int(np.random.choice(7, p=probs_arr))
 
         entropy = -np.sum(probs_arr * np.log(probs_arr + 1e-9))
         max_entropy = np.log(7)
@@ -545,6 +573,7 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
         "step":           env.current_step,
         "action":         labels[action],
         "action_idx":     action,
+        "strategy":       SERVER_STRATEGY,
         "action_probs":   [round(_safe_float(p), 4) for p in action_probs],
         "reward":         clean_reward,
         "dopamine":       round(_safe_float(brain.simulator.dopamine_level), 4),

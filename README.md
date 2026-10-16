@@ -353,6 +353,46 @@ out‑performance has to come from regime timing (the `trend200` overlay), not f
 more episodes. The learning core is now a sound foundation for that — it will
 optimise whatever edge the objective actually contains instead of blowing up.
 
+### Deployed strategy: the max‑return default (2026‑10)
+
+Because "more training" cannot beat a *correctly specified* timing rule on this
+data, the server now deploys a selectable strategy, defaulting to the
+**pre‑specified 200‑day trend overlay** (`FLYBRAIN_STRATEGY=trend200`). It beats
+buy & hold by the most on the headline full‑cycle test, **and** with a lower
+drawdown and a higher Sharpe:
+
+| window (OOS) | buy & hold | **trend200** | fly (learned) | fly + gate |
+|--------------|-----------:|-------------:|--------------:|-----------:|
+| full cycle 2021H2–2024 (return %) | 238.5 | **255.8** | 244.7 | 228.7 |
+| ″ max drawdown % | 55.8 | **38.4** | 54.5 | 41.5 |
+| ″ Sharpe | 1.09 | **1.32** | 1.11 | 1.26 |
+| 2022 bear (return %) | −38.6 | −18.4 | −40.7 | −20.1 |
+| 2024 bull (return %) | **74.1** | 52.6 | 65.8 | 41.6 |
+
+No single strategy wins *every* regime (buy & hold wins a pure bull; momentum
+wins the 2022 bear), but the trend overlay maximises the full‑cycle return that
+is the headline, at the best risk‑adjusted cost. On the server's own default demo
+env (AAPL, 2022–2024) the choice is even clearer — and the learned checkpoint is
+out‑of‑distribution there — so the trend overlay is the better default:
+
+| AAPL 2022–2024 | return % | max drawdown % | Sharpe |
+|----------------|---------:|---------------:|-------:|
+| buy & hold | 51.4 | 29.8 | 0.67 |
+| **trend200** | **53.4** | **15.1** | **1.03** |
+| fly (learned) | 44.1 | 32.2 | 0.61 |
+
+```bash
+FLYBRAIN_STRATEGY=trend200   # default: max-return pre-specified overlay
+FLYBRAIN_STRATEGY=fly        # the raw learned policy
+FLYBRAIN_STRATEGY=buy_hold   # passive benchmark
+FLYBRAIN_REGIME_GATE=true    # apply the trend gate on top of a learned "fly"
+```
+
+The learned policy is still shipped and still beats buy & hold on the multi‑asset
+cycle (+6pp), so nothing is thrown away — the default is simply chosen to
+maximise return. `/eval_episode` keeps evaluating the *brain itself* on purpose.
+
+
 
 ## Connectome Mode
 The feature extractor can be wired with FlyWire‑derived weights:
