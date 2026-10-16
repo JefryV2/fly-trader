@@ -61,3 +61,58 @@ def test_cannot_sell_without_shares_is_noop():
     _obs, _r, _done, _trunc, info = env.step(6)  # Sell 100% with 0 shares
     assert info["portfolio_value"] == pytest.approx(env.initial_cash)
     assert env.shares == 0
+
+
+# ── reward_mode semantics (benchmark-relative objective) ───────────────────
+def _run(env, actions):
+    env.reset()
+    total = 0.0
+    info = {}
+    for a in actions:
+        _obs, r, done, _trunc, info = env.step(a)
+        total += r
+        if done:
+            break
+    return total, info
+
+
+def test_reward_mode_validation_rejects_unknown():
+    with pytest.raises(AssertionError):
+        FlyTradeEnv(AAPL, window_size=30, reward_mode="nope")
+
+
+def test_excess_reward_all_hold_equals_negative_benchmark():
+    """Never trading must score exactly the negative of the buy&hold return."""
+    start, end = SPLITS["test"]
+    env = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                      reward_mode="excess")
+    total, info = _run(env, [0] * env.n_steps)
+    excess_pct = ((info["portfolio_value"] - env.initial_cash)
+                  - (info["benchmark_value"] - env.initial_cash)) / env.initial_cash * 100
+    assert excess_pct == pytest.approx(-36.65, abs=1.0)  # AAPL 2024 buy&hold
+    # Sum of per-step rewards must match the realised excess (no terminal fudge
+    # until `done`): compare against the pre-terminal sum instead.
+    assert total < 0
+
+
+def test_excess_reward_of_holding_the_benchmark_is_just_costs():
+    """Buy 100% at the first bar then hold == the benchmark, minus one trade fee."""
+    start, end = SPLITS["test"]
+    env = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                      reward_mode="excess")
+    total, info = _run(env, [3] + [0] * env.n_steps)
+    # 0.1% transaction cost -> about -0.1 in these log-return*100 reward units
+    assert total == pytest.approx(-0.1, abs=0.05)
+    final_excess = ((info["portfolio_value"] - env.initial_cash)
+                    - (info["benchmark_value"] - env.initial_cash)) / env.initial_cash * 100
+    assert abs(final_excess) < 1.0
+
+
+def test_benchmark_value_tracks_price_ratio():
+    start, end = SPLITS["test"]
+    env = FlyTradeEnv(AAPL, window_size=30, start_date=start, end_date=end,
+                      reward_mode="excess")
+    _run(env, [0] * env.n_steps)
+    first = float(env.data.iloc[env.window_size - 1]["Close"])
+    last = float(env.data.iloc[len(env.data) - 2]["Close"])  # env stops one bar early
+    assert env.benchmark_value == pytest.approx(env.initial_cash * last / first, rel=1e-6)

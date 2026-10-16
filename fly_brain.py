@@ -304,6 +304,10 @@ class MaleCNS1024Simulator:
         self.last_spikes = np.zeros(self.N_NEURONS, dtype=np.float32)
         self.dopamine_level = 0.0
         self._inh = 0.0  # Feedback inhibition strength for sparse coding
+        # Deterministic encoding settings. ``noise_std=0`` removes the additive
+        # membrane noise so the read-out is a reproducible function of the obs.
+        self.noise_std = 0.0
+        self.settle_steps = 6  # LIF updates used to settle the cascade per obs
         self.use_connectome = use_connectome
         
         # Build weight matrix: try connectome first, then fallback
@@ -413,104 +417,123 @@ class MaleCNS1024Simulator:
         return self._build_random_weights(rng)
 
     def reset(self):
-        self.V[:] = 0.0
-        self.last_spikes[:] = 0.0
+        self.reset_state()
         self.dopamine_level = 0.0
+
+    def reset_state(self):
+        """Clear membrane state only (V, spikes, inhibition); keep dopamine."""
+        self.V = np.zeros(self.N_NEURONS, dtype=np.float32)
+        self.last_spikes = np.zeros(self.N_NEURONS, dtype=np.float32)
         self._inh = 0.0
 
-    def step(self, obs: np.ndarray, reward: float = 0.0) -> np.ndarray:
-        """
-        obs: (batch, obs_dim) market window observation
-        reward: latest step reward to stimulate PAM/PPL1 dopaminergic neurons
-        returns: (batch, N_NEURONS) spiking rate [0, 1]
-        """
-        batch = obs.shape[0]
-        out_spikes = np.zeros((batch, self.N_NEURONS), dtype=np.float32)
+    def _sensory_input(self, cur_obs: np.ndarray) -> np.ndarray:
+        """Build the per-step synaptic input current from one observation."""
+        inp = np.zeros(self.N_NEURONS, dtype=np.float32)
+        al_start = self.IDX_AL.start
+        cx_start = self.IDX_CX.start
+        n_cx = self.IDX_CX.stop - cx_start
 
-        # Update dopamine level with decay and incoming reward
-        # Slower decay (0.92 vs 0.85) = longer memory of rewards
-        # Lower multiplier (8.0 vs 12.0) = less volatile dopamine spikes
-        self.dopamine_level = float(np.clip(0.92 * self.dopamine_level + reward * 8.0, -1.0, 1.0))
+        # 1. Antennal Lobe sensory injection (128 neurons)
+        # Close prices from the 30-step OHLCV window (every 5th element from index 3)
+        close_prices = [float(cur_obs[step * 5 + 3]) for step in range(min(30, len(cur_obs) // 5))]
 
-        # Anatomical slice bounds
-        al_start, al_end = self.IDX_AL.start, self.IDX_AL.stop
-        cx_start, cx_end = self.IDX_CX.start, self.IDX_CX.stop
-        dan_start, dan_end = self.IDX_DAN.start, self.IDX_DAN.stop
-        n_cx = cx_end - cx_start
-        n_dan = dan_end - dan_start
+        # Sub-cluster 1 (AL 0..59): price momentum & relative changes
+        if len(close_prices) >= 2:
+            c0 = close_prices[0]
+            for i, c in enumerate(close_prices[:30]):
+                inp[al_start + i] = np.tanh(((c - c0) / (c0 + 1e-9)) * 8.0) * 2.2
+            for i in range(1, len(close_prices[:30])):
+                prev_c = close_prices[i - 1]
+                inp[al_start + 30 + i - 1] = np.tanh(((close_prices[i] - prev_c) / (prev_c + 1e-9)) * 25.0) * 2.2
+            inp[al_start + 59] = np.tanh(((close_prices[-1] - c0) / (c0 + 1e-9)) * 10.0) * 2.5
+
+        # Sub-cluster 2 (AL 60..89): momentum indicators
+        if len(cur_obs) >= 240:
+            inp[al_start + 60: al_start + 90] = np.tanh(cur_obs[150:180] * 1.5) * 2.0
+        # Sub-cluster 3 (AL 90..119): trend & regime indicators
+        if len(cur_obs) >= 210:
+            inp[al_start + 90: al_start + 120] = np.tanh(cur_obs[180:210] * 1.5) * 2.0
+        # Sub-cluster 4 (AL 120..127): current-step indicator snapshot
+        if len(cur_obs) >= 8:
+            inp[al_start + 120: al_start + 128] = np.tanh(cur_obs[-8:] * 1.5) * 2.0
+
+        # 2. Central Complex (CX): internal directional compass
+        if len(close_prices) >= 5:
+            c_last, c_first = close_prices[-1], close_prices[0]
+            c_mid = close_prices[len(close_prices) // 2]
+            trend_win = (c_last - c_first) / (c_first + 1e-9)
+            mom_recent = (c_last - c_mid) / (c_mid + 1e-9)
+            angle = (math.atan2(mom_recent * 15.0, trend_win * 10.0) % (2 * math.pi))
+            ring_idx = int((angle / (2 * math.pi)) * n_cx) % n_cx
+            trend_mag = min(2.0, abs(trend_win) * 12.0)
+            for offset in range(-4, 5):
+                idx = cx_start + (ring_idx + offset) % n_cx
+                inp[idx] += math.exp(-0.5 * (offset ** 2)) * (1.5 + trend_mag)
+
+        return inp
+
+    def _single_step(self, cur_obs: np.ndarray) -> np.ndarray:
+        """One recurrent LIF update for a single observation."""
+        inp = self._sensory_input(cur_obs)
+
+        # 3. Dopaminergic PAM/PPL1 stimulation
+        dan_start = self.IDX_DAN.start
+        n_dan = self.IDX_DAN.stop - dan_start
         n_pam = n_dan // 2
-        n_ppl1 = n_dan - n_pam
+        if self.dopamine_level > 0:
+            inp[dan_start:dan_start + n_pam] += self.dopamine_level * 2.2
+        else:
+            inp[dan_start + n_pam:self.IDX_DAN.stop] += abs(self.dopamine_level) * 2.2
 
-        for b in range(batch):
-            inp = np.zeros(self.N_NEURONS, dtype=np.float32)
-            cur_obs = obs[b]
+        recurrent = self.W @ self.last_spikes
+        self._inh = self._inh * 0.85 + float(np.sum(self.last_spikes)) * 0.0005
+        inp += 0.15 * np.ones(self.N_NEURONS, dtype=np.float32)
+        noise = (np.random.normal(0, self.noise_std, size=self.N_NEURONS).astype(np.float32)
+                 if self.noise_std > 0 else 0.0)
+        self.V = self.decay * self.V + inp + recurrent - self._inh + noise
 
-            # 1. Antennal Lobe sensory injection (128 neurons)
-            # High-fidelity biological contrast encoding across price returns & indicators
-            n_al = al_end - al_start
-            # Extract close prices from 30-step OHLCV window (every 5th element starting at index 3)
-            close_prices = [float(cur_obs[step * 5 + 3]) for step in range(min(30, len(cur_obs) // 5))]
+        spikes = (self.V > self.threshold).astype(np.float32)
+        self.V[spikes > 0] = 0.0  # reset membrane potential
+        self.last_spikes = spikes
+        return spikes
 
-            # Sub-cluster 1 (AL 0..59, 60 neurons): Price momentum & relative changes
-            if len(close_prices) >= 2:
-                c0 = close_prices[0]
-                # Deviations from baseline (first 30 neurons)
-                for i, c in enumerate(close_prices[:30]):
-                    inp[al_start + i] = np.tanh(((c - c0) / (c0 + 1e-9)) * 8.0) * 2.2
-                # Step-by-step returns (next 29 neurons)
-                for i in range(1, len(close_prices[:30])):
-                    prev_c = close_prices[i-1]
-                    inp[al_start + 30 + i - 1] = np.tanh(((close_prices[i] - prev_c) / (prev_c + 1e-9)) * 25.0) * 2.2
-                # Overall window return (neuron 59)
-                inp[al_start + 59] = np.tanh(((close_prices[-1] - c0) / (c0 + 1e-9)) * 10.0) * 2.5
+    def step(self, obs: np.ndarray, reward: float = 0.0) -> np.ndarray:
+        """Stateful, one LIF update per sample (live stepping path).
 
-            # Sub-cluster 2 (AL 60..89, 30 neurons): Momentum indicators (RSI, MACD, BB width)
-            if len(cur_obs) >= 150 + 90:
-                inp[al_start + 60 : al_start + 90] = np.tanh(cur_obs[150 : 180] * 1.5) * 2.0
+        NOTE: prefer ``encode`` for feature extraction; see its docstring.
+        """
+        if reward:
+            self.dopamine_level = float(np.clip(0.92 * self.dopamine_level + reward * 8.0, -1.0, 1.0))
+        obs2 = np.atleast_2d(obs)
+        out = np.zeros((obs2.shape[0], self.N_NEURONS), dtype=np.float32)
+        for b in range(obs2.shape[0]):
+            out[b] = self._single_step(obs2[b])
+        return out
 
-            # Sub-cluster 3 (AL 90..119, 30 neurons): Trend & Regime indicators (EMA, SMA, ATR, Vol)
-            if len(cur_obs) >= 180 + 30:
-                inp[al_start + 90 : al_start + 120] = np.tanh(cur_obs[180 : 210] * 1.5) * 2.0
+    def encode(self, obs_np: np.ndarray, reward: float = 0.0, steps: int = None) -> np.ndarray:
+        """Stateless, deterministic spike encoding of observations.
 
-            # Sub-cluster 4 (AL 120..127, 8 neurons): Current step snapshot (last 8 features in obs)
-            if len(cur_obs) >= 8:
-                inp[al_start + 120 : al_start + 128] = np.tanh(cur_obs[-8:] * 1.5) * 2.0
+        Resets the membrane state and *settles* the network for ``steps`` LIF
+        updates with the same sensory input, so the returned spike pattern is a
+        pure function of the observation (no history, no noise).
 
-            # 2. Central Complex (CX): internal market regime & directional compass
-            if len(close_prices) >= 5:
-                c_last = close_prices[-1]
-                c_first = close_prices[0]
-                c_mid = close_prices[len(close_prices) // 2]
-                trend_win = (c_last - c_first) / (c_first + 1e-9)
-                mom_recent = (c_last - c_mid) / (c_mid + 1e-9)
-                angle = (math.atan2(mom_recent * 15.0, trend_win * 10.0) % (2 * math.pi))
-                ring_idx = int((angle / (2 * math.pi)) * n_cx) % n_cx
-                trend_mag = min(2.0, abs(trend_win) * 12.0)
-                for offset in range(-4, 5):
-                    idx = cx_start + (ring_idx + offset) % n_cx
-                    inp[idx] += math.exp(-0.5 * (offset ** 2)) * (1.5 + trend_mag)
-
-            # 3. Dopaminergic PAM/PPL1 stimulation
-            if self.dopamine_level > 0:
-                # PAM cluster (positive reward / profit)
-                inp[dan_start:dan_start + n_pam] += self.dopamine_level * 2.2
-            else:
-                # PPL1 cluster (negative reward / loss punishment)
-                inp[dan_start + n_pam:dan_end] += abs(self.dopamine_level) * 2.2
-
-            # Recurrent LIF update with mild feedback inhibition for sparse coding
-            recurrent = self.W @ self.last_spikes
-            self._inh = self._inh * 0.85 + np.sum(self.last_spikes) * 0.0005  # Very low inhibition for cascade
-            # Add small baseline current to prevent hyperpolarization dead-zone
-            inp += 0.15 * np.ones(self.N_NEURONS, dtype=np.float32)
-            self.V = self.decay * self.V + inp + recurrent - self._inh * np.ones(self.N_NEURONS) + np.random.normal(0, 0.05, size=self.N_NEURONS).astype(np.float32)
-
-            spikes = (self.V > self.threshold).astype(np.float32)
-            self.V[spikes > 0] = 0.0  # reset membrane potential
-            self.last_spikes = spikes
-            out_spikes[b] = spikes
-
-        return out_spikes
+        This determinism is what makes the replay buffer valid: the features
+        computed at collection time are reproduced exactly at training time.
+        The old stateful/non-deterministic read-out made every stored
+        ``(obs, action)`` pair inconsistent with the features used to choose it.
+        """
+        steps = self.settle_steps if steps is None else steps
+        if reward:
+            self.dopamine_level = float(np.clip(0.92 * self.dopamine_level + reward * 8.0, -1.0, 1.0))
+        obs2 = np.atleast_2d(obs_np)
+        out = np.zeros((obs2.shape[0], self.N_NEURONS), dtype=np.float32)
+        for b in range(obs2.shape[0]):
+            self.reset_state()
+            spikes = self.last_spikes
+            for _ in range(steps):
+                spikes = self._single_step(obs2[b])
+            out[b] = spikes
+        return out
 
 
 # ── PyTorch Dopaminergic Actor-Critic Agent ─────────────────────────────────
@@ -531,6 +554,8 @@ class FlyBrainAgent(nn.Module):
         weight_cache: Path to cached weight pickle file
         N_NEURONS: Total neurons (default 1024). If >1024, uses more connectome data.
     """
+    SENSORY_DIM = 16  # dims of the compact observation summary (see sensory_from_obs)
+
     def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
         super().__init__()
         self.simulator = MaleCNS1024Simulator(
@@ -542,8 +567,14 @@ class FlyBrainAgent(nn.Module):
         self.obs_dim = obs_dim
         self.N_NEURONS = self.simulator.N_NEURONS
 
+        self.mbon_dim = self.simulator.IDX_MBON.stop - self.simulator.IDX_MBON.start
+        # The connectome read-out is concatenated with a compact, live sensory
+        # vector derived from the observation (see ``sensory_from_obs``). The
+        # cached connectome currently emits an all-zero MBON pattern for every
+        # market state, so without this channel the policy would be a constant
+        # action regardless of the market.
         self.feature_encoder = nn.Sequential(
-            nn.Linear(self.simulator.IDX_MBON.stop - self.simulator.IDX_MBON.start, 128),
+            nn.Linear(self.mbon_dim + self.SENSORY_DIM, 128),
             nn.LayerNorm(128),
             nn.SiLU(),
             nn.Dropout(0.1),
@@ -582,6 +613,10 @@ class FlyBrainAgent(nn.Module):
         self.max_grad_norm = 1.0
         self.target_entropy = 1.30  # High target entropy to prevent collapse into pure Holding
         self.entropy_alpha = 0.15
+        # Anti-stall bias pushing the policy toward buying. Kept at 0.35 for the
+        # legacy/live demo, but set to 0.0 when training against a benchmark so
+        # the fly is free to learn that holding cash is sometimes optimal.
+        self.buy_margin_coef = 0.35
 
     def _init_smart_weights(self):
         # Heuristic smart initialization
@@ -597,22 +632,63 @@ class FlyBrainAgent(nn.Module):
             self.actor[-1].bias.copy_(torch.tensor([0.35, 0.15, 0.20, 0.10, 0.15, 0.20, 0.10]))
 
     def step_simulation(self, obs_np: np.ndarray, reward: float = 0.0) -> np.ndarray:
-        """Step the 1024-neuron connectome and return spiking rates."""
-        return self.simulator.step(obs_np, reward=reward)
+        """Deterministic connectome encoding -> (batch, N_NEURONS) spike rates."""
+        return self.simulator.encode(obs_np, reward=reward)
+
+    @staticmethod
+    def sensory_from_obs(obs) -> np.ndarray:
+        """Compact, live summary of one observation (a pure function of obs).
+
+        5 multi-horizon returns + realised volatility (2) + range position (1)
+        + the 8 current-step indicators = 16 dims. These are already normalised
+        by the environment, so we only apply bounded clipping.
+        """
+        o = np.asarray(obs, dtype=np.float64).reshape(-1)
+        n = o.size
+        close = o[3:min(n, 150):5]                  # the 30 window closes
+        cur_ind = o[-8:] if n >= 8 else np.zeros(8, dtype=np.float64)
+        feats = []
+        if close.size >= 21:
+            c = float(close[-1])
+            for k in (1, 2, 5, 10, 20):
+                base = float(close[-1 - k])
+                feats.append(np.clip((c / (base + 1e-9) - 1.0) * 10.0, -3.0, 3.0))
+            rets = np.diff(close) / (close[:-1] + 1e-9)
+            vol = float(np.std(rets))
+            short_vol = float(np.std(rets[-10:])) if rets.size >= 10 else vol
+            feats.append(np.clip(vol * 100.0, 0.0, 3.0))
+            feats.append(np.clip(short_vol * 100.0, 0.0, 3.0))
+            lo, hi = float(close.min()), float(close.max())
+            feats.append(np.clip((c - lo) / (hi - lo + 1e-9) * 2.0 - 1.0, -1.0, 1.0))
+        else:
+            feats.extend([0.0] * 8)
+        feats.extend(list(np.clip(cur_ind, -5.0, 5.0)))
+        return np.asarray(feats, dtype=np.float32)
+
+    def encode_obs(self, obs):
+        """Return (feature_vector, spikes_1024) for one observation, once."""
+        obs2 = np.asarray(obs, dtype=np.float32).reshape(1, -1)
+        spikes = self.simulator.encode(obs2)[0]
+        mbon = spikes[self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]
+        feat = np.concatenate([mbon, self.sensory_from_obs(obs2[0])]).astype(np.float32)
+        return feat, spikes
+
+    def encode_feature(self, obs) -> np.ndarray:
+        """Deterministic feature vector fed to the read-out: [MBON spikes, sensory]."""
+        return self.encode_obs(obs)[0]
+
+    def forward_features(self, feat_t: torch.Tensor):
+        features = self.feature_encoder(feat_t)
+        logits = self.actor(features)
+        value = self.critic(features)
+        return logits, value
 
     def forward(self, obs_t: torch.Tensor, reward: float = 0.0):
-        obs_np = obs_t.detach().cpu().numpy()
-        spikes_1024 = self.step_simulation(obs_np, reward=reward)
-        # Create an independent tensor copy (no grad, no memory share) to protect the autograd graph from simulator in-place state updates
-        spikes_t = torch.from_numpy(np.array(spikes_1024, dtype=np.float32, copy=True))
-
-        mbon_spikes = spikes_t[:, self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]
-        features = self.feature_encoder(mbon_spikes)
-        logits = self.actor(features)
-        # Remove clamp to allow full range of logits for better policy differentiation
-        # logits = torch.clamp(logits, -1.5, 1.5)
-        value = self.critic(features)
-        return logits, value, spikes_1024
+        """Back-compat wrapper: obs tensor -> (logits, value, spikes)."""
+        obs_np = np.atleast_2d(obs_t.detach().cpu().numpy())
+        feats = np.stack([self.encode_feature(row) for row in obs_np])
+        logits, value = self.forward_features(torch.from_numpy(feats))
+        return logits, value, self.simulator.encode(obs_np)
 
     def select_action(self, obs_np: np.ndarray, reward: float = 0.0, deterministic: bool = False):
         """
@@ -621,11 +697,9 @@ class FlyBrainAgent(nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            if obs_np.ndim == 1:
-                obs_np = obs_np[np.newaxis, :]
-            obs_t = torch.tensor(obs_np, dtype=torch.float32)
-
-            logits, value, spikes_1024 = self.forward(obs_t, reward=reward)
+            row = np.asarray(obs_np, dtype=np.float32).reshape(-1)
+            feat, spikes_1024 = self.encode_obs(row)
+            logits, value = self.forward_features(torch.from_numpy(feat)[None, :])
 
             probs = F.softmax(logits[0], dim=-1).cpu().numpy()
             # Anti-collapse exploration floor: ensures no action probability ever drops to zero
@@ -637,11 +711,18 @@ class FlyBrainAgent(nn.Module):
             else:
                 action = int(np.random.choice(7, p=probs))
 
-        return action, probs.tolist(), float(value.item()), spikes_1024[0]
+        return action, probs.tolist(), float(value.item()), spikes_1024
 
     def record_experience(self, obs, action, reward, next_obs, done):
-        """Append to experience buffer for online learning."""
-        self.replay_buffer.append((obs, action, reward, next_obs, done))
+        """Append to the experience buffer, caching *features* (not raw obs).
+
+        Caching makes training independent of the (expensive, and previously
+        non-deterministic) spiking simulator, and guarantees the stored
+        (feature, action) pairing is exactly the one the policy acted on.
+        """
+        feat = self.encode_feature(obs)
+        next_feat = self.encode_feature(next_obs)
+        self.replay_buffer.append((feat, action, reward, next_feat, done))
         if len(self.replay_buffer) > self.max_buffer_size:
             self.replay_buffer.pop(0)
 
@@ -660,11 +741,33 @@ class FlyBrainAgent(nn.Module):
 
     def set_policy_state(self, state):
         if state and 'model_state' in state:
-            self.load_state_dict(state['model_state'])
+            # tolerate architecture drift (e.g. feature_encoder input grew from
+            # 64 -> 80 dims when the sensory channel was added) instead of
+            # hard-failing on a stale checkpoint.
+            try:
+                self.load_state_dict(state['model_state'])
+            except RuntimeError as e:
+                missing, unexpected = self.load_state_dict(state['model_state'], strict=False)
+                print(f"Warning: partial checkpoint load ({e}); "
+                      f"missing={len(missing)} unexpected={len(unexpected)}")
         if state and 'optimizer_state' in state:
-            self.optimizer.load_state_dict(state['optimizer_state'])
+            try:
+                self.optimizer.load_state_dict(state['optimizer_state'])
+            except (ValueError, RuntimeError) as e:
+                print(f"Warning: skipped optimizer state ({e})")
         if state and 'replay_buffer' in state:
-            self.replay_buffer = list(state['replay_buffer'])
+            # Drop entries from an older architecture (raw 390-dim obs instead of
+            # the 80-dim cached features) so they cannot crash training.
+            expected = self.feature_encoder[0].in_features
+            buf = []
+            for e in state['replay_buffer']:
+                try:
+                    if (np.asarray(e[0]).size == expected
+                            and np.asarray(e[3]).size == expected):
+                        buf.append(e)
+                except Exception:
+                    continue
+            self.replay_buffer = buf
         if state and 'simulator_state' in state:
             sim_state = state['simulator_state']
             self.simulator.V = np.array(sim_state['V'], dtype=np.float32)
@@ -674,8 +777,8 @@ class FlyBrainAgent(nn.Module):
 
     def train_online_step(self, batch_size: int = 32) -> float:
         """
-        Dopamine-modulated Policy Gradient (Actor-Critic update)
-        Runs online to make the fly progressively smarter from recent trades.
+        Dopamine-modulated Policy Gradient (Actor-Critic update).
+        Runs online on cached features (no simulator re-run -> fast and valid).
         """
         if len(self.replay_buffer) < 8:
             return 0.0
@@ -684,43 +787,21 @@ class FlyBrainAgent(nn.Module):
         indices = np.random.choice(len(self.replay_buffer), size=min(batch_size, len(self.replay_buffer)), replace=False)
         batch = [self.replay_buffer[i] for i in indices]
 
-        obs_b = torch.tensor(np.array([b[0] for b in batch]), dtype=torch.float32)
+        feat_b = torch.tensor(np.stack([b[0] for b in batch]), dtype=torch.float32)
         acts_b = torch.tensor([b[1] for b in batch], dtype=torch.long)
         rews_b = torch.tensor([b[2] for b in batch], dtype=torch.float32)
-        next_obs_b = torch.tensor(np.array([b[3] for b in batch]), dtype=torch.float32)
+        next_feat_b = torch.tensor(np.stack([b[3] for b in batch]), dtype=torch.float32)
         dones_b = torch.tensor([b[4] for b in batch], dtype=torch.float32)
 
-        # Save current simulator state before any forward passes
-        state_v = self.simulator.V.copy()
-        state_spikes = self.simulator.last_spikes.copy()
-        state_inh = getattr(self.simulator, '_inh', 0.0)
-
-        # 1. Compute next-state values first in eval mode (pure inference, zero graph retention)
+        # 1. Next-state values in eval mode (pure inference, no graph retention).
         self.eval()
         with torch.no_grad():
-            _, next_values_raw, _ = self.forward(next_obs_b)
-            next_values = next_values_raw.detach().clone()
+            _, next_values = self.forward_features(next_feat_b)
+            next_values = next_values.detach()
 
-        # 2. Switch to train mode for current state forward pass
+        # 2. Current-state forward pass (gradients flow through the read-out).
         self.train()
-        
-        # Run simulator in no_grad context to prevent in-place state corruption of autograd graph
-        with torch.no_grad():
-            obs_np = obs_b.detach().cpu().numpy()
-            spikes_1024 = self.step_simulation(obs_np, reward=0.0)
-            spikes_t = torch.from_numpy(np.array(spikes_1024, dtype=np.float32, copy=True))
-        
-        # Learnable layers outside no_grad - gradients flow through actor/critic
-        mbon_spikes = spikes_t[:, self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]
-        features = self.feature_encoder(mbon_spikes)
-        logits = self.actor(features)
-        values = self.critic(features)
-
-        # Restore simulator state so live inference is unaffected by training
-        self.simulator.V = state_v
-        self.simulator.last_spikes = state_spikes
-        if hasattr(self.simulator, '_inh'):
-            self.simulator._inh = state_inh
+        logits, values = self.forward_features(feat_b)
 
         # TD target — fully detached so no inplace-op autograd issues
         gamma = self.gamma
@@ -755,7 +836,7 @@ class FlyBrainAgent(nn.Module):
         buy_margin = logits[:, 0].clone() - logits[:, 1:4].clone().mean(dim=-1)
         margin_penalty = F.relu(buy_margin - 0.15).mean()
 
-        total_loss = actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy + 0.35 * margin_penalty
+        total_loss = actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy + self.buy_margin_coef * margin_penalty
 
         self.optimizer.zero_grad()
         total_loss.backward()

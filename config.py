@@ -54,11 +54,22 @@ REGION_ORDER = ["AL", "KC", "CX", "DAN", "MBON"]
 # These splits give every ticker the same held-out TEST window (2024) and the
 # same VAL window (2023 H2); TRAIN uses everything before the val window that
 # the file actually contains.
-SPLITS = {
-    "train": ("2015-01-01", "2023-06-30"),
-    "val":   ("2023-07-01", "2023-12-31"),
-    "test":  ("2024-01-01", "2024-12-31"),
+SPLIT_PLANS = {
+    "default": {
+        "train": ("2015-01-01", "2023-06-30"),
+        "val":   ("2023-07-01", "2023-12-31"),
+        "test":  ("2024-01-01", "2024-12-31"),
+    },
+    # Honest bear-regime plan: train/validate before the 2022 drawdown and test
+    # on it. Answers "can the fly preserve capital when buy & hold cannot?".
+    # Only the long-history tickers (TSLA/NVDA/MSFT) have pre-2022 data.
+    "bear2022": {
+        "train": ("2015-01-01", "2020-12-31"),
+        "val":   ("2021-01-01", "2021-12-31"),
+        "test":  ("2022-01-01", "2022-12-31"),
+    },
 }
+SPLITS = SPLIT_PLANS["default"]
 TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]
 
 # Defaults for the API (server.py). Training must not see the test window.

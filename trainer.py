@@ -41,15 +41,23 @@ class RewardNormalizer:
 
 
 def shaped_reward(env_reward: float, portfolio_history, window: int = 20,
-                  sharpe_cap: float = 3.0) -> float:
-    """Same blend the server uses: 0.6 * env reward + 0.4 * rolling Sharpe."""
+                  sharpe_cap: float = 3.0, sharpe_blend: float = 0.4) -> float:
+    """Blend the env reward with a rolling Sharpe term.
+
+    ``sharpe_blend=0.0`` uses the environment reward as-is. That is preferred
+    for the benchmark-relative (``excess``) objective, where the env already
+    encodes "beat buy & hold" and adding a hand-rolled Sharpe term only muddies
+    the credit assignment.
+    """
+    if sharpe_blend <= 0.0:
+        return float(env_reward)
     sharpe = 0.0
     if len(portfolio_history) >= window:
         arr = np.asarray(portfolio_history[-window:], dtype=np.float64)
         rets = np.diff(arr) / (arr[:-1] + 1e-9)
         if rets.size and rets.std() > 1e-12:
             sharpe = float(np.clip(rets.mean() / (rets.std() + 1e-9), -sharpe_cap, sharpe_cap))
-    return 0.6 * float(env_reward) + 0.4 * sharpe
+    return (1.0 - sharpe_blend) * float(env_reward) + sharpe_blend * sharpe
 
 
 def train_episode(
@@ -62,6 +70,8 @@ def train_episode(
     batch_size: int = 64,
     min_buffer: int = 16,
     normalize_reward: bool = True,
+    sharpe_blend: float = 0.4,
+    max_steps: Optional[int] = None,
     seed: int = 0,
 ) -> dict:
     """Run one training episode, updating the agent online. Returns metrics."""
@@ -79,7 +89,8 @@ def train_episode(
         idx = min(env.current_step + env.window_size - 1, len(env.data) - 1)
         return float(env.data.iloc[idx]["Close"])
 
-    while not done and step < env.n_steps:
+    limit = max_steps if max_steps is not None else env.n_steps
+    while not done and step < limit:
         _, raw_probs, _, _ = agent.select_action(obs, reward=previous_shaped)
         probs = apply_preset(
             raw_probs, mask_preset,
@@ -94,7 +105,7 @@ def train_episode(
         pv = float(info["portfolio_value"])
         history.append(pv)
 
-        sr = shaped_reward(reward, history)
+        sr = shaped_reward(reward, history, sharpe_blend=sharpe_blend)
         previous_shaped = sr
         r = norm.normalize(sr) if normalize_reward else sr
         agent.record_experience(obs, action, r, next_obs, bool(done))

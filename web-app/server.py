@@ -116,7 +116,12 @@ MULTI_ASSET_TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]
 if not DATA_PATH.is_file():
     raise RuntimeError(f"Missing {DATA_PATH}. Run: python data_fetch.py AAPL")
 
-env   = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=False)
+# Objective used by the server's environment(s). "excess" (agent return minus a
+# passive buy & hold benchmark) matches how the shipped checkpoint is trained.
+SERVER_REWARD_MODE = os.environ.get("FLYBRAIN_REWARD_MODE", "excess")
+
+env   = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=False,
+                    reward_mode=SERVER_REWARD_MODE)
 
 CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain.pt"
 BEST_CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain_best.pt"
@@ -287,11 +292,13 @@ def _split_bounds(split: str):
     return SPLITS[split]
 
 
-def _make_env(ticker: str, split: str, *, enable_sl_tp: bool, window_size: int = 30) -> FlyTradeEnv:
+def _make_env(ticker: str, split: str, *, enable_sl_tp: bool, window_size: int = 30,
+              reward_mode: str = None) -> FlyTradeEnv:
     start, end = _split_bounds(split)
     return FlyTradeEnv(
         _data_path_for(ticker), window_size=window_size,
         enable_sl_tp=enable_sl_tp, start_date=start, end_date=end,
+        reward_mode=reward_mode or SERVER_REWARD_MODE,
     )
 
 

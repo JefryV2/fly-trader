@@ -35,7 +35,7 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block"):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "block", reward_mode: str = "shaped"):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
@@ -67,6 +67,9 @@ class FlyTradeEnv(gym.Env):
         self.enable_sl_tp = enable_sl_tp
         assert indicator_norm in ("block", "per_feature"), "indicator_norm must be 'block' or 'per_feature'"
         self.indicator_norm = indicator_norm
+        assert reward_mode in ("shaped", "excess", "logret"), \
+            "reward_mode must be 'shaped', 'excess' or 'logret'"
+        self.reward_mode = reward_mode
         self.reset()
 
     # Fractional trade sizes for each action
@@ -201,6 +204,11 @@ class FlyTradeEnv(gym.Env):
         self.highest_price = 0.0  # Track highest price since entry
         self.last_trade_step = -10  # Track last trade step for overtrading penalty
         self.steps_in_cash = 0  # Track consecutive steps holding 100% cash
+        # --- Buy & hold benchmark (used by reward_mode='excess') ---
+        # The benchmark buys 100% at the first tradable close and holds forever.
+        self.benchmark_entry_price = None
+        self.benchmark_value = self.initial_cash
+        self.prev_benchmark_value = self.initial_cash
         obs = self._get_observation(self.current_step)
         return obs, {}
 
@@ -288,104 +296,102 @@ class FlyTradeEnv(gym.Env):
         done = self.current_step >= self.n_steps
         next_obs = self._get_observation(self.current_step) if not done else np.zeros_like(self.observation_space.low)
 
-        # Compute portfolio value and reward
+        # Compute portfolio value
         portfolio_value = float(self.cash + self.shares * price)
         self.portfolio_history.append(portfolio_value)
 
-        # Get current observation for regime-aware rewards
-        current_obs = self._get_observation(min(self.current_step, len(self.data) - self.window_size - 1))
-        obs_flat = current_obs
+        # --- Buy & hold benchmark (buy 100% at the first tradable close, hold) ---
+        if self.benchmark_entry_price is None:
+            self.benchmark_entry_price = price
+        self.benchmark_value = self.initial_cash * (price / (self.benchmark_entry_price + 1e-12))
+
+        prev_pv = self.portfolio_history[-2] if len(self.portfolio_history) > 1 else self.initial_cash
+        log_ret = float(np.log((portfolio_value + 1e-9) / (prev_pv + 1e-9)))
+        bench_log_ret = float(np.log((self.benchmark_value + 1e-9) / (self.prev_benchmark_value + 1e-9)))
+        self.prev_benchmark_value = self.benchmark_value
 
         # --- Reward ---
-        if len(self.portfolio_history) > 1:
-            prev = self.portfolio_history[-2]
-            curr = self.portfolio_history[-1]
-            if prev > 1e-6 and curr > 1e-6:
-                log_ret = float(np.log(curr / prev))
+        # 'excess' compares the agent's per-step return against the passive
+        # buy & hold benchmark. A pure hold yields ~0 reward, so the only way to
+        # earn positive reward is to *time* the market better than the benchmark.
+        # This is the objective that matters for "beat buy & hold".
+        if self.reward_mode == "excess":
+            reward = (log_ret - bench_log_ret) * 100.0
+        else:
+            reward = log_ret * 100.0
+
+        if self.reward_mode == "shaped":
+            # --- Legacy hand-coded regime guidance (kept for back-compat) ---
+            # Observation layout: 150 OHLCV + 240 indicator features (8 x 30)
+            # Last features = current-step indicators: [rsi, macd_hist, bb_width,
+            #   atr, trend_strength, vol_regime, sma_ratio, ema_trend]
+            obs_flat = self._get_observation(
+                min(self.current_step, len(self.data) - self.window_size - 1))
+            ema_trend = float(obs_flat[-1]) if len(obs_flat) >= 1 else 0.0
+
+            # 1. Position Entry (Buying)
+            if action in [1, 2, 3]:
+                # Neutralize entry fee impact from immediate reward so the RL
+                # gradient does not penalize taking action to open positions
+                reward = max(reward, 0.0)
+                if ema_trend > 0.005:
+                    reward += 0.25 if self.shares <= 1e-6 else 0.10
+                elif ema_trend > -0.005:
+                    reward += 0.08
+                elif ema_trend < -0.015:
+                    reward -= 0.20
+
+            # 2. Position Management (Holding)
+            if action == 0:
+                if self.shares > 0 and ema_trend > 0.01:
+                    reward += 0.06
+                elif self.shares <= 1e-6 and ema_trend < -0.015:
+                    reward += 0.03
+                elif self.shares > 0 and ema_trend < -0.01:
+                    reward -= 0.10
+
+            # 3. Capital Protection (Selling)
+            if action in [4, 5, 6]:
+                if self.shares > 0 and ema_trend < -0.01:
+                    reward += 0.15
+                elif self.shares > 0 and ema_trend > 0.03:
+                    reward -= 0.02
+
+            # 4. Anti-churn overtrading penalty
+            if action != 0:
+                steps_since_last_trade = self.current_step - self.last_trade_step
+                if steps_since_last_trade < 2:
+                    reward -= 0.10
+                self.last_trade_step = self.current_step
+
+            # 5. Cash inactivity penalty
+            if self.shares <= 1e-6:
+                self.steps_in_cash = getattr(self, 'steps_in_cash', 0) + 1
+                if ema_trend > 0.002:
+                    reward -= 0.05
+                elif self.steps_in_cash > 2:
+                    reward -= 0.02
             else:
-                log_ret = 0.0
-        else:
-            log_ret = 0.0
+                self.steps_in_cash = 0
 
-        # Scaled return for meaningful learning signal
-        reward = log_ret * 100.0
-
-        # --- Regime-aware guidance ---
-        # Observation layout: 150 OHLCV features + 240 indicator features (8 x 30)
-        # Last features = current-step indicators: [rsi, macd_hist, bb_width, atr,
-        #                                           trend_strength, vol_regime,
-        #                                           sma_ratio, ema_trend]
-        trend_strength = obs_flat[-4] if len(obs_flat) >= 4 else 0.0
-        ema_trend = obs_flat[-1] if len(obs_flat) >= 1 else 0.0
-
-        # --- Regime-aware guidance ---
-        trend_strength = float(obs_flat[-4]) if len(obs_flat) >= 4 else 0.0
-        ema_trend = float(obs_flat[-1]) if len(obs_flat) >= 1 else 0.0
-
-        # 1. Position Entry (Buying)
-        if action in [1, 2, 3]:
-            # Neutralize entry transaction fee impact from immediate step reward
-            # so the RL gradient does not penalize taking action to open positions
-            reward = max(reward, 0.0)
-            if ema_trend > 0.005:
-                # Strong positive reward for entering position into an uptrend
-                reward += 0.25 if self.shares <= 1e-6 else 0.10
-            elif ema_trend > -0.005:
-                # Mild encouragement for exploratory position opening in neutral market
-                reward += 0.08
-            elif ema_trend < -0.015:
-                # Punish buying into clear falling knife / bear plunge
-                reward -= 0.20  # Increased from -0.12
-
-        # 2. Position Management (Holding)
-        if action == 0:
-            if self.shares > 0 and ema_trend > 0.01:
-                # Reward riding profitable uptrend
-                reward += 0.06
-            elif self.shares <= 1e-6 and ema_trend < -0.015:
-                # Reward patient cash preservation only in clear bear regimes
-                reward += 0.03
-            elif self.shares > 0 and ema_trend < -0.01:
-                # Punish bag-holding through a clear downtrend
-                reward -= 0.10  # Increased from -0.06
-
-        # 3. Capital Protection (Selling)
-        if action in [4, 5, 6]:
-            if self.shares > 0 and ema_trend < -0.01:
-                # Reward timely exit / stop loss protecting capital
-                reward += 0.15  # Increased from +0.08 to encourage selling in downtrend
-            elif self.shares > 0 and ema_trend > 0.03:
-                # Discourage premature exit during strong momentum
-                reward -= 0.02
-
-        # 4. Anti-churn overtrading penalty
-        if action != 0:
-            steps_since_last_trade = self.current_step - self.last_trade_step
-            if steps_since_last_trade < 2:
-                reward -= 0.10  # Increased from -0.03 to discourage overtrading
-            self.last_trade_step = self.current_step
-
-        # 5. Opportunity cost / cash inactivity penalty: sitting in cash forever is penalized
-        if self.shares <= 1e-6:
-            self.steps_in_cash = getattr(self, 'steps_in_cash', 0) + 1
-            if ema_trend > 0.002:
-                # Moderate penalty for missing active bull trend while idling in 100% cash
-                reward -= 0.05  # Reduced from -0.15
-            elif self.steps_in_cash > 2:
-                # Steady inactivity penalty for idling in cash
-                reward -= 0.02  # Reduced from -0.05
-        else:
-            self.steps_in_cash = 0
-
-        # Terminal bonus based on final portfolio performance - reduced to balance with Sharpe
+        # Terminal bonus
         if done:
-            total_return = (portfolio_value - self.initial_cash) / self.initial_cash
-            reward += 0.3 * total_return  # +0.3 for 100% total return
+            if self.reward_mode == "excess":
+                # Difference between agent and benchmark total return.
+                excess_ret = ((portfolio_value - self.initial_cash)
+                              - (self.benchmark_value - self.initial_cash)) / self.initial_cash
+                reward += 0.3 * excess_ret
+            elif self.reward_mode == "shaped":
+                total_return = (portfolio_value - self.initial_cash) / self.initial_cash
+                reward += 0.3 * total_return
 
         # Safety
         if not np.isfinite(reward):
             reward = 0.0
-        info = {"portfolio_value": float(portfolio_value)}
+        info = {
+            "portfolio_value": float(portfolio_value),
+            "benchmark_value": float(self.benchmark_value),
+        }
         return next_obs, reward, done, False, info
 
     def render(self, mode="human"):

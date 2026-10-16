@@ -149,6 +149,30 @@ Strategies compared:
 | `momentum`   | buy on positive price trend, sell 100% on negative |
 | `random`     | uniformly random over currently valid actions |
 
+## Training to beat buy & hold
+The reward can be switched with `FlyTradeEnv(..., reward_mode=...)`:
+
+| mode | per‑step reward | use |
+|------|-----------------|-----|
+| `shaped` | `log_return(agent)` + hand‑coded regime bonuses | legacy / live demo |
+| `logret` | `log_return(agent)` | absolute‑return RL |
+| **`excess`** | `log_return(agent) − log_return(buy&hold)` | **train to beat the benchmark** |
+
+Under `excess`, a passive hold scores ~0 and *only timing that beats the
+benchmark earns reward* — so "beat buy & hold" becomes the literal objective.
+`train.py` uses it by default, along with honest (validity‑only) masking and the
+anti‑stall buy‑margin penalty disabled, so the fly is free to learn that cash is
+sometimes the best position. Model selection uses the **validation** split with
+the *stochastic* policy averaged over several seeds (the greedy policy collapses
+to buy & hold early on, which makes a deterministic validation metric degenerate).
+
+```bash
+python train.py --all-tickers --episodes 50                     # excess objective
+python train.py --all-tickers --indicator-norm per_feature      # better features
+python train.py --all-tickers --reward-mode shaped              # legacy objective
+python train.py --all-tickers --select-by val_sharpe            # risk-adjusted pick
+```
+
 ## Connectome Mode
 The feature extractor can be wired with FlyWire‑derived weights:
 ```python
@@ -192,6 +216,7 @@ This writes source‑file SHA‑256 hashes, parameters and nnz alongside the mat
 | P0 | ✅ Real tests (`tests/`) |
 | P0 | ✅ Fixed/auditable connectome builder (`scripts/rebuild_connectome.py`) |
 | P1 | ✅ Split-aware training/eval + honest (median/held-out) API reporting |
+| P1 | ✅ Benchmark-relative (`excess`) objective so "beat buy & hold" is trained for |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
 | P1 | Wire real cell‑type anatomy instead of index ranges |
 | P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |
