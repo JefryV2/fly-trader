@@ -136,9 +136,17 @@ SERVER_REGIME_GATE = os.environ.get("FLYBRAIN_REGIME_GATE", "false").lower() == 
 # you want max return rather than a learning trader.
 SERVER_STRATEGY = os.environ.get("FLYBRAIN_STRATEGY", "fly").lower()
 RULE_STRATEGIES = {"trend200", "buy_hold", "momentum"}
+# Pre-specified volatility-targeting overlay for the learned policy (see
+# strategy.vol_target_prob_fn). The level was selected on the *validation* split
+# (0.30) and improves the fly on every held-out window, so it is on by default;
+# set FLYBRAIN_VOL_TARGET=0 to serve the raw learned policy.
+SERVER_VOL_TARGET = float(os.environ.get("FLYBRAIN_VOL_TARGET", "0.30"))
 # Regime block layout appended to each observation by env._compute_regime_block:
 # [close/SMA200-1, close/SMA50-1, ann_vol20, vol20/vol60].
 REGIME_DIST200_IDX = -4
+REGIME_VOL20_IDX = -2
+# Portfolio block: [exposure_frac, cash_frac, unrealised_pnl_frac, steps/30].
+PORTFOLIO_EXPOSURE_IDX = -8
 
 env   = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=False,
                     reward_mode=SERVER_REWARD_MODE,
@@ -292,6 +300,37 @@ def _apply_regime_gate(probs, obs, shares):
         return probs
     p = np.zeros(7, dtype=np.float64)
     p[6 if shares > 1e-6 else 0] = 1.0   # exit, or stay flat
+    return p.astype(probs.dtype)
+
+
+def _apply_vol_target(probs, obs, shares):
+    """Vol-target overlay: size exposure by inverse realised volatility.
+
+    Mirrors ``strategy.vol_target_prob_fn`` so live serving matches the offline
+    evaluation that selected the level (validation-selected 0.30). Applied
+    *after* the mask preset, whose buy-floor would otherwise re-introduce
+    exposure.
+    """
+    if SERVER_VOL_TARGET <= 0.0:
+        return probs
+    try:
+        vol = float(obs[REGIME_VOL20_IDX])
+        expo = float(obs[PORTFOLIO_EXPOSURE_IDX])
+    except Exception:
+        return probs
+    if vol <= 1e-6:
+        return probs
+    target = min(1.0, SERVER_VOL_TARGET / vol)
+    base = np.asarray(probs, dtype=np.float64)
+    p = np.zeros(7, dtype=np.float64)
+    if target - expo > 0.10:
+        p[1:4] = base[1:4]           # need more exposure: allow buys
+    elif expo - target > 0.10:
+        p[4:7] = base[4:7]           # need less exposure: allow sells
+    else:
+        p[0] = 1.0                   # inside the band: hold
+    if p.sum() <= 0:
+        return probs
     return p.astype(probs.dtype)
 
 
@@ -503,15 +542,18 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
                 price=price, entry_price=getattr(env, "entry_price", 0.0),
             ).astype(np.float32)
         else:
-            # Shared masking path (config.MASK_PRESETS['live']); see strategy.py.
-            # Heuristics are opt-in per preset so the policy can also be
-            # evaluated honestly (see scripts/backtest.py).
+            # Serve the learned policy with the SAME minimal ("honest") mask used
+            # in the offline backtest, so live behaviour matches the headline
+            # numbers. (The "live" preset re-weights the policy with hand-coded
+            # heuristics and is not what was evaluated.)
             raw_action_probs = np.asarray(raw_fly_probs, dtype=np.float64)
             probs_arr = apply_preset(
-                raw_action_probs, "live",
+                raw_action_probs, "honest",
                 shares=env.shares, cash=env.cash,
                 price=price, entry_price=getattr(env, "entry_price", 0.0),
             ).astype(np.float32)
+            # Pre-specified vol-targeting overlay (validation-selected level).
+            probs_arr = _apply_vol_target(probs_arr, obs, env.shares)
             probs_arr = _apply_regime_gate(probs_arr, obs, env.shares)
         action_probs = probs_arr.tolist()
 

@@ -190,6 +190,40 @@ def fly_prob_fn(agent):
     return prob_fn
 
 
+def vol_target_prob_fn(inner, *, target_vol: float = 0.30, band: float = 0.10):
+    """Deployment overlay: size exposure by inverse realised volatility.
+
+    Reads the regime block (``obs[-2]`` = annualised 20-day vol) and the
+    portfolio block (``obs[-8]`` = current exposure fraction). When current
+    exposure is more than ``band`` away from ``target_vol / vol`` (clipped to
+    [0, 1]), only same-direction actions keep their probability mass; otherwise
+    the agent holds.
+
+    This is a *pre-specified* risk overlay, not a learned behaviour. Its level is
+    selected on the validation split (0.30) and it improves the learned policy on
+    every held-out window (2022 bear, 2024 bull, the full cycle and the AAPL
+    demo). Returns ``inner``'s distribution unchanged when disabled (<= 0).
+    """
+    def prob_fn(obs, prev_action, shares, cash):
+        p = np.asarray(inner(obs, prev_action, shares, cash), dtype=np.float64)
+        if target_vol <= 0.0:
+            return p
+        vol = float(obs[-2]) if len(obs) >= 2 else 0.0
+        expo = float(obs[-8]) if len(obs) >= 8 else 0.0
+        if vol <= 1e-6:
+            return p
+        target = min(1.0, target_vol / vol)
+        mask = np.zeros(7, dtype=np.float64)
+        if target - expo > band:
+            mask[1:4] = p[1:4]          # need more exposure: allow buys
+        elif expo - target > band:
+            mask[4:7] = p[4:7]          # need less exposure: allow sells
+        else:
+            mask[0] = 1.0               # inside the band: hold
+        return mask if mask.sum() > 0 else p
+    return prob_fn
+
+
 def regime_gate_prob_fn(inner, *, dist200_threshold: float = 0.0,
                         vol_ratio_threshold: Optional[float] = None):
     """Deployment overlay: block new exposure (and exit) in a risk-off regime.
