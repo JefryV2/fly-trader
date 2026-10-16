@@ -171,6 +171,49 @@ python train.py --all-tickers --episodes 50                     # excess objecti
 python train.py --all-tickers --indicator-norm per_feature      # better features
 python train.py --all-tickers --reward-mode shaped              # legacy objective
 python train.py --all-tickers --select-by val_sharpe            # risk-adjusted pick
+python train.py --all-tickers --plan bear2022                   # train pre-2021, test 2022
+```
+
+### Honest out‑of‑sample results
+Two runs, 60 episodes, `per_feature`, `target_entropy 0.5`, honest mask, no buy‑margin,
+checkpoint selected by stochastic **validation** excess. Deterministic greedy policy on the
+held‑out test window:
+
+**Bull regime — train ≤2023‑06, test 2024** (all four tickers)
+
+| ticker | fly % | buy&hold % | excess | fly maxDD % | bh maxDD % |
+|--------|------:|-----------:|-------:|------------:|-----------:|
+| AAPL | 12.33 | 36.65 | −24.32 | 7.97 | 11.75 |
+| TSLA | 57.25 | 126.60 | −69.35 | 22.09 | 29.90 |
+| NVDA | 8.22 | 90.48 | −82.27 | 15.39 | 27.05 |
+| MSFT | 3.68 | 5.23 | −1.55 | 10.70 | 15.49 |
+| **mean** | **20.37** | **64.74** | **−44.37** | **14.04** | **21.05** |
+
+**Bear regime — train ≤2020, val 2021, test 2022** (TSLA/NVDA/MSFT; AAPL has no pre‑2022 data)
+
+| ticker | fly % | buy&hold % | excess | fly maxDD % | bh maxDD % |
+|--------|------:|-----------:|-------:|------------:|-----------:|
+| TSLA | −44.33 | −58.31 | **+13.98** | 56.71 | 71.43 |
+| NVDA | −21.76 | −39.83 | **+18.07** | 41.62 | 60.80 |
+| MSFT | +0.97 | −17.62 | **+18.59** | 15.43 | 31.77 |
+| **mean** | **−21.71** | **−38.59** | **+16.88** | **37.92** | **54.67** |
+
+**Reading this honestly.** The fly is a *risk‑managed* version of buy & hold, not a
+free lunch. In the 2024 bull market it gives up substantial upside (trailing by
+44 pp on average) while drawing down 7 pp less; in the 2022 bear market it loses
+16.9 pp *less* than buy & hold and draws down 17 pp less. In other words the
+trained policy reliably trades some upside for materially lower downside — it
+"beats buy & hold" decisively in a down market, and does not beat it in a strong
+up market. Raw‑return outperformance in a bull run would require a genuine
+next‑day directional edge, which a long‑only daily policy on these features does
+not have. Treat the excess‑return claim as regime‑dependent; the robust claim is
+better risk‑adjusted behaviour (lower drawdown, positive Sharpe with reduced
+exposure).
+
+Reproduce:
+```bash
+python train.py --all-tickers --plan default  --indicator-norm per_feature --target-entropy 0.5 --episodes 60
+python train.py --all-tickers --plan bear2022 --indicator-norm per_feature --target-entropy 0.5 --episodes 60
 ```
 
 ## Connectome Mode
