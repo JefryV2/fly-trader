@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 from scipy.sparse import csr_matrix
 
-from config import OBS_DIM
+from config import CUR_INDICATOR_SLICE, OBS_DIM
 
 # ── FlyWire Connectome Data Loader ──────────────────────────────────────────
 
@@ -454,8 +454,9 @@ class MaleCNS1024Simulator:
         if len(cur_obs) >= 210:
             inp[al_start + 90: al_start + 120] = np.tanh(cur_obs[180:210] * 1.5) * 2.0
         # Sub-cluster 4 (AL 120..127): current-step indicator snapshot
-        if len(cur_obs) >= 8:
-            inp[al_start + 120: al_start + 128] = np.tanh(cur_obs[-8:] * 1.5) * 2.0
+        cur_ind = cur_obs[CUR_INDICATOR_SLICE]
+        if len(cur_ind) >= 8:
+            inp[al_start + 120: al_start + 128] = np.tanh(cur_ind * 1.5) * 2.0
 
         # 2. Central Complex (CX): internal directional compass
         if len(close_prices) >= 5:
@@ -554,7 +555,7 @@ class FlyBrainAgent(nn.Module):
         weight_cache: Path to cached weight pickle file
         N_NEURONS: Total neurons (default 1024). If >1024, uses more connectome data.
     """
-    SENSORY_DIM = 16  # dims of the compact observation summary (see sensory_from_obs)
+    SENSORY_DIM = 20  # dims of the compact observation summary (see sensory_from_obs)
 
     def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
         super().__init__()
@@ -617,6 +618,8 @@ class FlyBrainAgent(nn.Module):
         # legacy/live demo, but set to 0.0 when training against a benchmark so
         # the fly is free to learn that holding cash is sometimes optimal.
         self.buy_margin_coef = 0.35
+        # Probability floor applied before sampling. 0.0 = off (see select_action).
+        self.action_floor = 0.0
 
     def _init_smart_weights(self):
         # Heuristic smart initialization
@@ -627,9 +630,14 @@ class FlyBrainAgent(nn.Module):
                     nn.init.zeros_(m.bias)
         # Actor head initial gain
         nn.init.orthogonal_(self.actor[-1].weight, gain=0.05)
-        # Prior biases: balanced Hold with proactive Buy / Sell interest
+        # Prior: start at *buy & hold*. The head prefers Buy 100% and then Hold
+        # (buys are masked off once fully invested, so "Hold" is the fallback).
+        # This means an untrained / rejected policy is buy & hold rather than a
+        # permanently half-invested or cash-holding one, and any training that
+        # does not beat the benchmark can simply be discarded.
+        #   [Hold, Buy25, Buy50, Buy100, Sell25, Sell50, Sell100]
         with torch.no_grad():
-            self.actor[-1].bias.copy_(torch.tensor([0.35, 0.15, 0.20, 0.10, 0.15, 0.20, 0.10]))
+            self.actor[-1].bias.copy_(torch.tensor([0.0, -1.5, -0.5, 1.0, -2.0, -2.0, -2.0]))
 
     def step_simulation(self, obs_np: np.ndarray, reward: float = 0.0) -> np.ndarray:
         """Deterministic connectome encoding -> (batch, N_NEURONS) spike rates."""
@@ -640,13 +648,15 @@ class FlyBrainAgent(nn.Module):
         """Compact, live summary of one observation (a pure function of obs).
 
         5 multi-horizon returns + realised volatility (2) + range position (1)
-        + the 8 current-step indicators = 16 dims. These are already normalised
-        by the environment, so we only apply bounded clipping.
+        + the 8 current-step indicators + the 4 portfolio-state values = 20 dims.
+        These are already normalised by the environment, so we only apply
+        bounded clipping.
         """
         o = np.asarray(obs, dtype=np.float64).reshape(-1)
         n = o.size
         close = o[3:min(n, 150):5]                  # the 30 window closes
-        cur_ind = o[-8:] if n >= 8 else np.zeros(8, dtype=np.float64)
+        cur_ind = o[CUR_INDICATOR_SLICE]
+        port = o[CUR_INDICATOR_SLICE.stop:]         # portfolio-state block
         feats = []
         if close.size >= 21:
             c = float(close[-1])
@@ -663,6 +673,10 @@ class FlyBrainAgent(nn.Module):
         else:
             feats.extend([0.0] * 8)
         feats.extend(list(np.clip(cur_ind, -5.0, 5.0)))
+        if port.size >= 4:
+            feats.extend(list(np.clip(port[:4], -1.0, 1.0)))
+        else:
+            feats.extend([0.0, 1.0, 0.0, 1.0])
         return np.asarray(feats, dtype=np.float32)
 
     def encode_obs(self, obs):
@@ -702,9 +716,13 @@ class FlyBrainAgent(nn.Module):
             logits, value = self.forward_features(torch.from_numpy(feat)[None, :])
 
             probs = F.softmax(logits[0], dim=-1).cpu().numpy()
-            # Anti-collapse exploration floor: ensures no action probability ever drops to zero
-            probs = np.maximum(probs, 0.04)
-            probs = probs / np.sum(probs)
+            # Optional anti-collapse exploration floor. Default 0.0: a floor of
+            # 0.04 over 7 actions forces >=24% probability mass onto
+            # non-preferred actions, which measurably drives churn (the agent
+            # keeps selling even when it wants to stay long).
+            if self.action_floor > 0.0:
+                probs = np.maximum(probs, self.action_floor)
+                probs = probs / np.sum(probs)
 
             if deterministic:
                 action = int(np.argmax(probs))

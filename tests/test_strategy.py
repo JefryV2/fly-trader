@@ -54,7 +54,8 @@ def test_performance_metrics_basic():
 
 def test_baseline_buy_hold_buys_then_holds():
     from strategy import baseline_probs
-    obs = np.ones(390)
+    from config import OBS_DIM
+    obs = np.ones(OBS_DIM)
     p = baseline_probs("buy_hold", obs, shares=0.0, cash=1e5, prev_action=0)
     assert p[3] == 1.0
     p = baseline_probs("buy_hold", obs, shares=1.0, cash=0.0, prev_action=3)

@@ -31,7 +31,19 @@ SELL_ACTIONS = (SELL_25, SELL_50, SELL_100)
 WINDOW_SIZE = 30
 N_OHLCV_FEATURES = WINDOW_SIZE * 5          # 150
 N_INDICATOR_FEATURES = WINDOW_SIZE * 8      # 240
-OBS_DIM = N_OHLCV_FEATURES + N_INDICATOR_FEATURES  # 390
+MARKET_OBS_DIM = N_OHLCV_FEATURES + N_INDICATOR_FEATURES  # 390
+# The observation also carries the agent's *own portfolio state* so the policy
+# can condition on whether it is already long/flat. Without this it cannot tell
+# the difference between "about to open a position" and "already fully invested",
+# which is why it could never commit to a full position.
+#   [exposure_frac, cash_frac, unrealised_pnl_frac, steps_since_trade/30]
+PORTFOLIO_OBS_DIM = 4
+OBS_DIM = MARKET_OBS_DIM + PORTFOLIO_OBS_DIM  # 394
+# Explicit slice of the *current-step* indicator vector inside the observation
+# (row 29 of the 30x8 indicator window). The spiking encoder and the sensory
+# summary must use this rather than [-8:], because the portfolio block now
+# occupies the tail of the observation.
+CUR_INDICATOR_SLICE = slice(MARKET_OBS_DIM - 8, MARKET_OBS_DIM)
 
 # ── Anatomical partitions as fractions of N_NEURONS ────────────────────────
 # AL / KC / CX / DAN / MBON  (128 / 640 / 128 / 64 / 64 out of 1024)

@@ -149,6 +149,9 @@ def main():
     p.add_argument("--target-entropy", type=float, default=None,
                    help="policy entropy target (lower = sharper/committed policy). "
                         "Default keeps the agent's built-in 1.30.")
+    p.add_argument("--action-floor", type=float, default=0.0,
+                   help="probability floor on every action when sampling (0 = off). "
+                        "A non-zero floor forces churn; default is off.")
     p.add_argument("--select-by", choices=["val_excess", "val_return", "val_sharpe"], default="val_excess")
     p.add_argument("--val-seeds", type=int, default=3,
                    help="seeds averaged for stochastic validation model selection")
@@ -185,11 +188,21 @@ def main():
     agent = FlyBrainAgent(obs_dim=obs_dim, use_connectome=args.use_connectome, N_NEURONS=args.n_neurons)
     agent.optimizer.param_groups[0]["lr"] = args.lr
     agent.buy_margin_coef = 0.35 if args.buy_margin else 0.0
+    agent.action_floor = args.action_floor
     if args.target_entropy is not None:
         agent.target_entropy = float(args.target_entropy)
 
+    # Snapshot the buy & hold prior. If training never beats the benchmark on
+    # validation we ship this instead, so the deployed policy is never worse
+    # than buy & hold by construction.
+    import copy
+    prior_state = copy.deepcopy(agent.get_policy_state())
+
     max_steps = args.max_steps if args.max_steps > 0 else None
-    best_score = -1e9
+    # Selection guard: for the excess objective a score of 0 == buy & hold, so
+    # only a strictly positive validation excess wins the right to be shipped.
+    best_score = 0.0 if args.select_by == "val_excess" else -1e9
+    saved = False
     for ep in range(args.episodes):
         ticker = tickers[ep % len(tickers)]
         env = make_env(ticker, "train", args)
@@ -221,11 +234,20 @@ def main():
             if score > best_score:
                 best_score = score
                 torch.save(agent.get_policy_state(), args.out)
+                saved = True
                 tag = "  <- best (saved)"
             print(f"          VAL fly={val['mean_fly']:>8.2f}% bh={val['mean_buyhold']:>8.2f}% "
                   f"excess={val['mean_excess']:>7.2f}% sharpe={val['mean_sharpe']:.3f}{tag}")
 
     print(f"\n[train] best validation score ({args.select_by}) = {best_score:.3f}  ->  {args.out}")
+    if not saved:
+        # Nothing beat buy & hold on validation: fall back to the prior, which
+        # IS buy & hold. Better to tie the benchmark than to ship a policy that
+        # loses to it.
+        agent.set_policy_state(prior_state)
+        torch.save(agent.get_policy_state(), args.out)
+        print("[train] no checkpoint beat buy & hold on validation -> "
+              "shipping the buy & hold prior (ties the benchmark)")
 
     # Final out-of-sample test report (deterministic = greedy deployment policy).
     if Path(args.out).exists():

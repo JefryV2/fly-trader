@@ -58,7 +58,8 @@ class FlyTradeEnv(gym.Env):
         self._compute_indicators()
         n_ohlcv = window_size * len(required)
         n_ind = window_size * 8  # RSI, MACD, BB width, ATR, trend strength, vol regime, SMA ratio, EMA trend
-        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind,), dtype=np.float32)
+        n_port = 4  # exposure, cash fraction, unrealised PnL, steps-since-trade
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind + n_port,), dtype=np.float32)
         # 7 actions: Hold, Buy 25%, Buy 50%, Buy 100%, Sell 25%, Sell 50%, Sell 100%
         self.action_space = gym.spaces.Discrete(7)
         self.transaction_cost = transaction_cost
@@ -192,7 +193,20 @@ class FlyTradeEnv(gym.Env):
             ind_std = np.std(ind)
             if ind_std > 1e-6:
                 ind = (ind - ind_mean) / ind_std
-        return np.concatenate([ohlcv, ind])
+        # Portfolio-state block: lets the policy condition on its own position.
+        price_idx = min(idx + self.window_size - 1, len(self.data) - 1)
+        price = float(self.data.iloc[price_idx]["Close"])
+        position_value = self.shares * price
+        total = self.cash + position_value
+        exposure = position_value / total if total > 1e-9 else 0.0
+        cash_frac = self.cash / total if total > 1e-9 else 1.0
+        if self.shares > 0 and self.entry_price > 0:
+            unreal = float(np.clip(price / self.entry_price - 1.0, -1.0, 1.0))
+        else:
+            unreal = 0.0
+        recency = float(np.clip((self.current_step - self.last_trade_step) / 30.0, 0.0, 1.0))
+        port = np.array([exposure, cash_frac, unreal, recency], dtype=np.float32)
+        return np.concatenate([ohlcv, ind, port])
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -327,7 +341,10 @@ class FlyTradeEnv(gym.Env):
             #   atr, trend_strength, vol_regime, sma_ratio, ema_trend]
             obs_flat = self._get_observation(
                 min(self.current_step, len(self.data) - self.window_size - 1))
-            ema_trend = float(obs_flat[-1]) if len(obs_flat) >= 1 else 0.0
+            # ema_trend is the last feature of the *market* block (the portfolio
+            # block is appended after it), so index by the market width, not [-1].
+            n_market = self.window_size * 13  # 5 OHLCV + 8 indicators per bar
+            ema_trend = float(obs_flat[n_market - 1]) if len(obs_flat) >= n_market else 0.0
 
             # 1. Position Entry (Buying)
             if action in [1, 2, 3]:

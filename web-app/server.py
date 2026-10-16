@@ -679,9 +679,9 @@ def train_batch(payload: TrainBatchPayload):
             avg_entropy = float(np.mean(ep_entropies))
             max_entropy = np.log(7)
             if avg_entropy < 0.4 * max_entropy:  # Less than 40% of max entropy
-                # Reinitialize actor biases to balanced distribution
+                # Reinitialize to the buy & hold prior (see FlyBrainAgent._init_smart_weights)
                 with torch.no_grad():
-                    brain.actor[-1].bias.copy_(torch.tensor([0.0, 0.25, 0.20, 0.15, 0.25, 0.20, 0.15]))
+                    brain.actor[-1].bias.copy_(torch.tensor([0.0, -1.5, -0.5, 1.0, -2.0, -2.0, -2.0]))
                 brain.replay_buffer.clear()
                 brain.optimizer.state.clear()
 
