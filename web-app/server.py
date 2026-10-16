@@ -129,13 +129,12 @@ SERVER_INDICATOR_NORM = os.environ.get("FLYBRAIN_INDICATOR_NORM", "per_feature")
 # upside in a pure bull run (see README, "Does the fly beat buy & hold?").
 # Off by default so the raw learned policy can be evaluated honestly.
 SERVER_REGIME_GATE = os.environ.get("FLYBRAIN_REGIME_GATE", "false").lower() == "true"
-# Deployed strategy. On the honest full-cycle test the learned policy only
-# narrowly beats buy & hold (+6pp), while the *pre-specified* 200-day trend
-# overlay beats it outright (+17pp) with a lower drawdown and a higher Sharpe
-# (see README, "cross-regime matrix"). So the max-return default is "trend200";
-# set FLYBRAIN_STRATEGY=fly to serve the raw learned policy instead, or
-# "buy_hold" / "momentum" for the other pre-specified rules.
-SERVER_STRATEGY = os.environ.get("FLYBRAIN_STRATEGY", "trend200").lower()
+# Deployed strategy. Default "fly": serve the live learned policy so it trades
+# and keeps learning online. "trend200" is the pre-specified overlay that
+# maximises raw full-cycle return (see README cross-regime matrix) but it is a
+# static rule that sits flat below the 200-day trend — set it explicitly when
+# you want max return rather than a learning trader.
+SERVER_STRATEGY = os.environ.get("FLYBRAIN_STRATEGY", "fly").lower()
 RULE_STRATEGIES = {"trend200", "buy_hold", "momentum"}
 # Regime block layout appended to each observation by env._compute_regime_block:
 # [close/SMA200-1, close/SMA50-1, ann_vol20, vol20/vol60].
@@ -158,6 +157,20 @@ brain = FlyBrainAgent(
     use_connectome=USE_CONNECTOME,
     N_NEURONS=N_NEURONS
 )
+
+# Online-learning exploration target. The brain default is 1.30 nats out of a
+# maximum of ln 7 ~= 1.95, i.e. almost uniform — with that target the entropy
+# tuner inside train_online_step drives entropy_coef to its 0.2 cap and the
+# policy degenerates into ~2000 random trades per episode (churn, and a much
+# worse return). The shipped checkpoint was trained with train.py
+# --target-entropy 0.5, so we match it here: online learning then *refines* the
+# deployed policy instead of wrecking it. Override with FLYBRAIN_TARGET_ENTROPY.
+brain.target_entropy = float(os.environ.get("FLYBRAIN_TARGET_ENTROPY", "0.5"))
+# Optional probability floor (see select_action). 0.0 = the honest, decisive
+# policy. Raise it (e.g. 0.03) if you want a visibly higher-turnover demo at the
+# cost of return — measured on AAPL: floor 0.03 turns ~36 trades into ~365 and
+# $140k into $102k. Override with FLYBRAIN_ACTION_FLOOR.
+brain.action_floor = float(os.environ.get("FLYBRAIN_ACTION_FLOOR", "0.0"))
 
 chosen_cp = None
 for candidate in [BEST_CHECKPOINT_PATH, CHECKPOINT_PATH]:
@@ -196,6 +209,7 @@ _total_episodes_trained = 0
 _online_learning_enabled = True
 _learning_history = []
 _simulation_runs = []   # Persistent log of every /train_batch call
+_collapse_events = []   # Episodes where the policy's entropy collapsed
 if SIMULATION_HISTORY_PATH.exists():
     try:
         with open(SIMULATION_HISTORY_PATH, "r") as f:
@@ -214,6 +228,19 @@ def _save_simulation_history():
 _last_shaped_reward = 0.0
 _best_score = -999.0  # Track best Sharpe ratio for checkpoint saving
 _patience_counter = 0  # Early stopping patience
+
+# Seed the best-Sharpe tracker from disk. Without this it starts at -999, so the
+# very first /train_batch episode always counts as a new record and overwrites
+# the shipped fly_brain_best.pt with an in-sample (and often worse) policy — i.e.
+# clicking "Train" once destroyed the deployed brain. Now training only replaces
+# the best checkpoint when it genuinely beats the recorded score.
+if BEST_SCORE_PATH.exists():
+    try:
+        with open(BEST_SCORE_PATH, "r") as _f:
+            _best_score = float(json.load(_f).get("best_score", _best_score))
+        print(f"Seeded best-Sharpe tracker from {BEST_SCORE_PATH.name}: {_best_score:.4f}")
+    except Exception as _e:
+        print(f"Warning loading best score: {_e}")
 class RewardNormalizer:
     """Welford running mean and variance normalizer with safe standard deviation and clipping."""
     def __init__(self):
@@ -632,7 +659,7 @@ class TrainBatchPayload(BaseModel):
 @app.post("/train_batch")
 def train_batch(payload: TrainBatchPayload):
     """Fast-forward multi-episode training with detailed telemetry of what the brain learned."""
-    global _total_episodes_trained, _last_shaped_reward, _reward_count, _reward_mean, _reward_std, _learning_history, _simulation_runs
+    global _total_episodes_trained, _last_shaped_reward, _reward_count, _reward_mean, _reward_std, _learning_history, _simulation_runs, _collapse_events
     import datetime as _dt
     n_episodes = min(max(1, payload.episodes), 100)
 
@@ -738,16 +765,17 @@ def train_batch(payload: TrainBatchPayload):
                 except RuntimeError as e:
                     print(f"Episode-end step skipped: {e}")
 
-        # Policy collapse detection: reset replay buffer and reinitialize weights if entropy collapsed
+        # Anti-collapse *telemetry only*. The entropy coefficient is already
+        # auto-tuned toward brain.target_entropy inside train_online_step, so we
+        # do not need to re-initialise weights or clear the buffer/optimizer
+        # here. The old handler did exactly that, which is why the online brain
+        # never improved across episodes: every time it started to commit to a
+        # strategy its weights were wiped and it began again from the prior.
         if ep_entropies:
             avg_entropy = float(np.mean(ep_entropies))
-            max_entropy = np.log(7)
-            if avg_entropy < 0.4 * max_entropy:  # Less than 40% of max entropy
-                # Reinitialize to the buy & hold prior (see FlyBrainAgent._init_smart_weights)
-                with torch.no_grad():
-                    brain.actor[-1].bias.copy_(torch.tensor([0.0, -1.5, -0.5, 1.0, -2.0, -2.0, -2.0]))
-                brain.replay_buffer.clear()
-                brain.optimizer.state.clear()
+            if avg_entropy < 0.35 * float(np.log(7)):  # < ~0.68 nats
+                _collapse_events.append({"episode": _total_episodes_trained + ep + 1,
+                                         "avg_entropy": round(avg_entropy, 4)})
 
         final_pv = ep_history[-1]
         ep_ret = (final_pv - train_env.initial_cash) / train_env.initial_cash * 100

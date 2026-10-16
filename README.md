@@ -353,44 +353,64 @@ out‑performance has to come from regime timing (the `trend200` overlay), not f
 more episodes. The learning core is now a sound foundation for that — it will
 optimise whatever edge the objective actually contains instead of blowing up.
 
-### Deployed strategy: the max‑return default (2026‑10)
+### Deployed strategy: the fly is the trades‑vs‑profit knee (2026‑10)
 
-Because "more training" cannot beat a *correctly specified* timing rule on this
-data, the server now deploys a selectable strategy, defaulting to the
-**pre‑specified 200‑day trend overlay** (`FLYBRAIN_STRATEGY=trend200`). It beats
-buy & hold by the most on the headline full‑cycle test, **and** with a lower
-drawdown and a higher Sharpe:
+The server deploys a selectable strategy. The default is the **learned fly**
+(`FLYBRAIN_STRATEGY=fly`): it is the only candidate that is Pareto‑optimal on
+*trades* and *profit* at the same time — nothing beats it on both axes.
 
-| window (OOS) | buy & hold | **trend200** | fly (learned) | fly + gate |
-|--------------|-----------:|-------------:|--------------:|-----------:|
-| full cycle 2021H2–2024 (return %) | 238.5 | **255.8** | 244.7 | 228.7 |
-| ″ max drawdown % | 55.8 | **38.4** | 54.5 | 41.5 |
-| ″ Sharpe | 1.09 | **1.32** | 1.11 | 1.26 |
-| 2022 bear (return %) | −38.6 | −18.4 | −40.7 | −20.1 |
-| 2024 bull (return %) | **74.1** | 52.6 | 65.8 | 41.6 |
+| window (OOS, greedy, honest mask) | buy & hold | momentum | fly + gate | **fly** | trend200 |
+|-----------------------------------|-----------:|---------:|-----------:|--------:|---------:|
+| full cycle 2021H2–2024 return %   | 238.5 | 134.6 | 228.7 | **244.7** | **255.8** |
+| ″ trades                          | 3 | **222** | 145 | **136** | 83 |
+| ″ Sharpe                          | 1.09 | 1.08 | 1.26 | 1.11 | **1.32** |
 
-No single strategy wins *every* regime (buy & hold wins a pure bull; momentum
-wins the 2022 bear), but the trend overlay maximises the full‑cycle return that
-is the headline, at the best risk‑adjusted cost. On the server's own default demo
-env (AAPL, 2022–2024) the choice is even clearer — and the learned checkpoint is
-out‑of‑distribution there — so the trend overlay is the better default:
+Forcing more trades costs real money: an exploration floor that turns the fly's
+~36 AAPL trades into ~365 also cuts its AAPL return from $140k to $102k. The only
+way to more *profit* is the `trend200` overlay (255.8% vs 244.7%), but it trades
+less and sits flat in cash below the 200‑day trend. So "as many trades as
+possible *and* as much profit as possible" lands on the fly.
 
-| AAPL 2022–2024 | return % | max drawdown % | Sharpe |
-|----------------|---------:|---------------:|-------:|
-| buy & hold | 51.4 | 29.8 | 0.67 |
-| **trend200** | **53.4** | **15.1** | **1.03** |
-| fly (learned) | 44.1 | 32.2 | 0.61 |
+On the server's own demo env (AAPL 2022–2024, stochastic serving):
+
+| AAPL 2022–2024 | return % | trades |
+|----------------|---------:|-------:|
+| buy & hold | 51.4 | 1 |
+| trend200 | 53.4 | 11 |
+| **fly (learned)** | 47.8 | **30** |
+| fly + gate | 22.6 | 42 |
+| momentum | 23.9 | 53 |
 
 ```bash
-FLYBRAIN_STRATEGY=trend200   # default: max-return pre-specified overlay
-FLYBRAIN_STRATEGY=fly        # the raw learned policy
+FLYBRAIN_STRATEGY=fly        # default: the learned policy (trades + keeps learning)
+FLYBRAIN_STRATEGY=trend200   # pre-specified max-return overlay (fewer trades, sits flat)
 FLYBRAIN_STRATEGY=buy_hold   # passive benchmark
+FLYBRAIN_STRATEGY=momentum   # most trades, lowest return
 FLYBRAIN_REGIME_GATE=true    # apply the trend gate on top of a learned "fly"
+FLYBRAIN_ACTION_FLOOR=0.03   # force churn: many more trades, much lower return
+FLYBRAIN_TARGET_ENTROPY=0.5  # online-learning entropy target (matches the checkpoint)
 ```
 
 The learned policy is still shipped and still beats buy & hold on the multi‑asset
-cycle (+6pp), so nothing is thrown away — the default is simply chosen to
-maximise return. `/eval_episode` keeps evaluating the *brain itself* on purpose.
+cycle (+6pp), so nothing is thrown away — the default is simply the honest
+best trade‑off. `/eval_episode` keeps evaluating the *brain itself* on purpose.
+
+#### Server online‑learning fixes (2026‑10)
+
+Three bugs made the server's "Train" button worse than useless:
+
+1. **It wiped what it learned.** `/train_batch` re‑initialised the actor back to
+   the buy & hold prior (and cleared the buffer/optimizer) whenever entropy
+   dipped below 40% of max — so the brain could never commit to a strategy
+   across episodes. It now only records telemetry; the entropy tuner handles
+   exploration.
+2. **Every "Train" click overwrote the shipped best policy.** `_best_score`
+   started at `-999`, so the first batch always counted as a new record. It is
+   now seeded from `fly_brain_best_score.json` at startup.
+3. **The exploration target was near‑uniform.** `target_entropy` defaulted to
+   1.30 nats (max is ln 7 ≈ 1.95), which degenerated the policy into ~2000
+   random trades per episode. The server now matches the value the checkpoint
+   was trained with (0.5).
 
 
 
