@@ -304,6 +304,56 @@ benchmark out of sample. The simple trend overlay remains a stronger, cheaper
 risk‑adjusted alternative and is one environment variable away
 (`FLYBRAIN_REGIME_GATE=true`).
 
+### Learning core: what was broken, and what "more training" now does (2026‑10)
+
+The trainer could not exploit more training because the online update was
+**diverging**. The critic bootstrapped its TD target off *its own* network (the
+"deadly triad"), so the reported loss grew without bound (`0 → −52`), the actor
+logits saturated, and extra episodes made things *worse*, not better. What
+changed (all in `trainer.py` / `FlyBrainAgent.train_online_step`):
+
+- **Target critic** — a Polyak‑averaged copy of the critic supplies the
+  bootstrapped value, and TD targets are **clamped** (`target_clip=10`). The
+  critic loss is now bounded (`≈0.003–0.5`) and `|V|≈2` instead of exploding.
+- **n‑step returns** (`--n-step 5`) — each stored transition carries its own
+  `gamma**n`, so the compounding, benchmark‑relative signal is credited over the
+  horizon where de‑risking actually matters (1‑step TD could not).
+- **Persistent reward normalisation** — the (tiny) excess reward is standardised
+  against a Welford estimate that **survives across episodes** instead of resetting
+  every episode, so the critic no longer chases a moving reward scale.
+- **LR schedule** (`--lr-decay 0.99`) — a long run anneals the learning rate
+  instead of bouncing around at a fixed step size.
+- **Diagnostics** — every update publishes `agent.last_diag`
+  (`critic_loss`, `value_abs_mean`, `entropy`, …), and `train.py` prints it, so a
+  diverging run is obvious immediately.
+
+The read‑out shape (`128/64`) was deliberately **kept**, so existing checkpoints
+still load bit‑for‑bit; the `Dropout` layers became `nn.Identity` (identical
+parameter names, no train/eval noise). Checkpoint loading now tolerates
+architecture drift (missing/shape‑changed tensors degrade gracefully instead of
+crashing the server), and `pytest.ini` scopes collection to `tests/` so a plain
+`pytest` works (the repo root has tracked ad‑hoc `test_*.py` scripts).
+
+**Honest result: stabilising the learner made it converge to buy & hold.** With
+the update fixed, a 200‑episode `cycle_b` run does not beat the shipped
+early‑stopped checkpoint — it correctly drives entropy to `0`, trading to `1–3`
+orders/episode, and test return to buy & hold. The one high‑validation snapshot
+(ep 10, val excess +9.2) *lost* −53.8 pp out of sample, i.e. it was a short‑val
+fluke, not signal. Reproduce:
+
+```bash
+python train.py --all-tickers --plan cycle_b --indicator-norm per_feature \
+    --target-entropy 0.5 --n-step 5 --lr-decay 0.99 --episodes 200 \
+    --select-by val_excess --no-guard --out /tmp/fly_run.pt
+```
+
+The takeaway is the same conclusion as above, now with a stable learner in place:
+on a bull‑dominated window the *optimal* learned policy **is** buy & hold, so
+out‑performance has to come from regime timing (the `trend200` overlay), not from
+more episodes. The learning core is now a sound foundation for that — it will
+optimise whatever edge the objective actually contains instead of blowing up.
+
+
 ## Connectome Mode
 The feature extractor can be wired with FlyWire‑derived weights:
 ```python

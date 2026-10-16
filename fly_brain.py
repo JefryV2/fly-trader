@@ -17,6 +17,7 @@ Features:
 """
 
 import math
+import copy
 import numpy as np
 import torch
 import torch.nn as nn
@@ -574,18 +575,26 @@ class FlyBrainAgent(nn.Module):
         # cached connectome currently emits an all-zero MBON pattern for every
         # market state, so without this channel the policy would be a constant
         # action regardless of the market.
+        # Read-out head. Shapes match the original 128/64 read-out on purpose so
+        # existing checkpoints keep loading bit-for-bit. The Dropout layers are
+        # replaced by ``nn.Identity``: identical module indices -> identical
+        # parameter names (so old checkpoints still load) but no train/eval
+        # disagreement or gradient noise. Capacity is *not* the bottleneck here
+        # — on a bull-only window more capacity just converges harder to
+        # buy & hold — so the head stays small and the stability work lives in
+        # the update rule instead (see ``train_online_step``).
         self.feature_encoder = nn.Sequential(
             nn.Linear(self.mbon_dim + self.SENSORY_DIM, 128),
             nn.LayerNorm(128),
             nn.SiLU(),
-            nn.Dropout(0.1),
+            nn.Identity(),  # was Dropout(0.1): same index, no keys
         )
 
         self.actor = nn.Sequential(
             nn.Linear(128, 64),
             nn.LayerNorm(64),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Identity(),  # was Dropout(0.1): keeps the head at actor.4.*
             nn.Linear(64, 7)
         )
 
@@ -593,15 +602,33 @@ class FlyBrainAgent(nn.Module):
             nn.Linear(128, 64),
             nn.LayerNorm(64),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Identity(),  # was Dropout(0.1): keeps the head at critic.4.*
             nn.Linear(64, 1)
         )
 
         # Initialize with smart momentum/trend bias so the fly is intelligent immediately
         self._init_smart_weights()
 
-        # Optimizer with decoupled weight decay (AdamW) for numerical stability and compatibility
-        self.optimizer = optim.AdamW(self.parameters(), lr=3e-4, weight_decay=1e-4)
+        # Optimizer with decoupled weight decay (AdamW). Only the trainable
+        # read-out is optimised — the frozen target critic is excluded below.
+        self.optimizer = optim.AdamW(
+            list(self.feature_encoder.parameters())
+            + list(self.actor.parameters())
+            + list(self.critic.parameters()),
+            lr=3e-4, weight_decay=1e-4,
+        )
+        self.base_lr = 3e-4
+
+        # ── Stability: target critic ───────────────────────────────────────
+        # Bootstrapped TD with a single online network can diverge (the "deadly
+        # triad"); previously the value targets blew up and made long runs
+        # useless. A slow Polyak-averaged target critic plus a clipped target
+        # bounds the TD targets so extra training compounds instead of exploding.
+        self.critic_target = copy.deepcopy(self.critic)
+        for _p in self.critic_target.parameters():
+            _p.requires_grad_(False)
+        self.tau = 0.01
+        self.target_clip = 10.0
 
         # Experience replay buffer for online learning
         self.replay_buffer = []
@@ -620,6 +647,18 @@ class FlyBrainAgent(nn.Module):
         self.buy_margin_coef = 0.35
         # Probability floor applied before sampling. 0.0 = off (see select_action).
         self.action_floor = 0.0
+        # Last optimizer step, exposed for monitoring (see train.py).
+        self.last_diag = {}
+
+    def _readout_parameters(self):
+        return (list(self.feature_encoder.parameters())
+                + list(self.actor.parameters())
+                + list(self.critic.parameters()))
+
+    def set_lr(self, lr: float):
+        """Set the optimizer learning rate (used by the trainer's LR schedule)."""
+        for group in self.optimizer.param_groups:
+            group["lr"] = float(lr)
 
     def _init_smart_weights(self):
         # Heuristic smart initialization
@@ -764,15 +803,30 @@ class FlyBrainAgent(nn.Module):
 
     def set_policy_state(self, state):
         if state and 'model_state' in state:
-            # tolerate architecture drift (e.g. feature_encoder input grew from
-            # 64 -> 80 dims when the sensory channel was added) instead of
-            # hard-failing on a stale checkpoint.
+            # ``strict=False`` tolerates missing/unexpected *keys* (e.g. a
+            # checkpoint saved before the target critic existed) without
+            # complaining, but it still raises on *shape* mismatches. On a shape
+            # mismatch we fall back to loading only the tensors whose shape
+            # matches, so a stale checkpoint degrades gracefully instead of
+            # crashing the server.
+            ms = state['model_state']
             try:
-                self.load_state_dict(state['model_state'])
+                self.load_state_dict(ms, strict=False)
             except RuntimeError as e:
-                missing, unexpected = self.load_state_dict(state['model_state'], strict=False)
-                print(f"Warning: partial checkpoint load ({e}); "
-                      f"missing={len(missing)} unexpected={len(unexpected)}")
+                own = self.state_dict()
+                filtered = {
+                    k: v for k, v in ms.items()
+                    if k in own and hasattr(v, "shape") and tuple(v.shape) == tuple(own[k].shape)
+                }
+                self.load_state_dict(filtered, strict=False)
+                if len(filtered) < len(own):
+                    print(f"Warning: partial checkpoint load (architecture drift: {str(e)[:80]}); "
+                          f"loaded {len(filtered)}/{len(own)} tensors")
+            if 'critic_target.0.weight' not in ms:
+                # Older checkpoints predate the target critic. Point it at the
+                # freshly loaded online critic so *continued* training is
+                # consistent (inference never touches the target).
+                self.critic_target.load_state_dict(self.critic.state_dict())
         if state and 'optimizer_state' in state:
             try:
                 self.optimizer.load_state_dict(state['optimizer_state'])
@@ -815,20 +869,28 @@ class FlyBrainAgent(nn.Module):
         rews_b = torch.tensor([b[2] for b in batch], dtype=torch.float32)
         next_feat_b = torch.tensor(np.stack([b[3] for b in batch]), dtype=torch.float32)
         dones_b = torch.tensor([b[4] for b in batch], dtype=torch.float32)
+        # n-step transitions carry their own discount gamma**n; legacy 5-tuple
+        # entries are 1-step and use plain gamma.
+        gammas_n = torch.tensor(
+            [float(b[5]) if len(b) > 5 else self.gamma for b in batch],
+            dtype=torch.float32,
+        ).unsqueeze(1)
 
-        # 1. Next-state values in eval mode (pure inference, no graph retention).
+        # 1. Next-state values from the *target* critic (Polyak-averaged) so the
+        #    TD target does not chase the online network (the deadly triad that
+        #    previously blew the value targets up and made long runs useless).
         self.eval()
         with torch.no_grad():
-            _, next_values = self.forward_features(next_feat_b)
-            next_values = next_values.detach()
+            next_values = self.critic_target(self.feature_encoder(next_feat_b)).detach()
 
         # 2. Current-state forward pass (gradients flow through the read-out).
         self.train()
         logits, values = self.forward_features(feat_b)
 
-        # TD target — fully detached so no inplace-op autograd issues
-        gamma = self.gamma
-        targets = (rews_b.unsqueeze(1) + gamma * next_values * (1.0 - dones_b.unsqueeze(1))).detach()
+        # TD target — detached and clamped so one bad batch cannot blow the critic up.
+        targets = (rews_b.unsqueeze(1)
+                   + gammas_n * next_values * (1.0 - dones_b.unsqueeze(1))).detach()
+        targets = torch.clamp(targets, -self.target_clip, self.target_clip)
         advantages = targets - values.detach()
 
         # Advantage normalization and clipping for stable, reliable policy gradients
@@ -863,9 +925,24 @@ class FlyBrainAgent(nn.Module):
 
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self._readout_parameters(), self.max_grad_norm)
         self.optimizer.step()
 
+        # Polyak-average the target critic toward the online critic.
+        with torch.no_grad():
+            for tgt_p, on_p in zip(self.critic_target.parameters(), self.critic.parameters()):
+                tgt_p.data.mul_(1.0 - self.tau).add_(on_p.data, alpha=self.tau)
+
+        self.last_diag = {
+            "actor_loss": float(actor_loss.item()),
+            "critic_loss": float(critic_loss.item()),
+            "entropy": float(entropy.item()),
+            "entropy_coef": float(self.entropy_coef),
+            "adv_abs_mean": float(advantages.detach().abs().mean().item()),
+            "value_abs_mean": float(values.detach().abs().mean().item()),
+            "target_abs_mean": float(targets.abs().mean().item()),
+            "logit_abs_mean": float(logits.detach().abs().mean().item()),
+        }
         return float(total_loss.item())
 
     def get_synaptic_weights_sample(self) -> np.ndarray:

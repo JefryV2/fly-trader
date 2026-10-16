@@ -8,10 +8,21 @@ one implementation instead of copy-pasting it.
 The fly brain is a *fixed* feature extractor; only the small read-out
 (feature encoder + actor + critic) is trained, online, from experience
 replayed out of a bounded buffer.
+
+Two things matter for "more training keeps helping":
+
+* **A stable reward scale.** The benchmark-relative reward is tiny and its scale
+  must not move around, so normalisation is *persistent across episodes* (kept
+  on the agent) rather than reset every episode.
+* **n-step returns.** A one-step TD target barely propagates the compounding
+  effect that actually makes regime timing pay. n-step returns (default 5)
+  credit the policy over the horizon where de-risking matters, and each stored
+  transition carries its own discount ``gamma**n``.
 """
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -71,12 +82,22 @@ def train_episode(
     min_buffer: int = 16,
     normalize_reward: bool = True,
     sharpe_blend: float = 0.4,
+    n_step: int = 5,
     max_steps: Optional[int] = None,
     seed: int = 0,
 ) -> dict:
     """Run one training episode, updating the agent online. Returns metrics."""
     rng = np.random.default_rng(seed)
-    norm = RewardNormalizer()
+    n_step = max(1, int(n_step))
+
+    if normalize_reward:
+        norm = getattr(agent, "reward_norm", None)
+        if norm is None:
+            norm = RewardNormalizer()
+            agent.reward_norm = norm
+    else:
+        norm = None
+
     obs, _ = env.reset(seed=seed)
     history = [float(env.initial_cash)]
     losses = []
@@ -89,8 +110,29 @@ def train_episode(
         idx = min(env.current_step + env.window_size - 1, len(env.data) - 1)
         return float(env.data.iloc[idx]["Close"])
 
+    gamma = float(getattr(agent, "gamma", 0.99))
+
+    def _emit(items, next_feat, terminal):
+        """Append an n-step transition built from ``items[0]`` onwards.
+
+        ``items`` is a list of ``(feat, action, reward, next_feat)`` tuples; the
+        discounted return runs over the whole list and the bootstrap state is
+        ``next_feat`` (any state *after* the horizon).
+        """
+        feat0, act0 = items[0][0], items[0][1]
+        R = 0.0
+        for k, item in enumerate(items):
+            R += (gamma ** k) * item[2]
+        gk = gamma ** len(items)
+        agent.replay_buffer.append((feat0, act0, R, next_feat, bool(terminal), gk))
+        if len(agent.replay_buffer) > agent.max_buffer_size:
+            agent.replay_buffer.pop(0)
+
+    pending: deque = deque()
     limit = max_steps if max_steps is not None else env.n_steps
+    next_feat = agent.encode_feature(obs)
     while not done and step < limit:
+        feat = next_feat
         _, raw_probs, _, _ = agent.select_action(obs, reward=previous_shaped)
         probs = apply_preset(
             raw_probs, mask_preset,
@@ -107,8 +149,20 @@ def train_episode(
 
         sr = shaped_reward(reward, history, sharpe_blend=sharpe_blend)
         previous_shaped = sr
-        r = norm.normalize(sr) if normalize_reward else sr
-        agent.record_experience(obs, action, r, next_obs, bool(done))
+        r = norm.normalize(sr) if norm is not None else sr
+        next_feat = agent.encode_feature(next_obs)
+        pending.append((feat, action, r, next_feat))
+
+        if done or truncated:
+            # Episode over: flush every pending start with its discounted return
+            # to the end. Terminal -> no bootstrap.
+            remaining = list(pending)
+            for i in range(len(remaining)):
+                _emit(remaining[i:], remaining[-1][3], True)
+            pending.clear()
+        elif len(pending) >= n_step:
+            _emit(list(pending)[:n_step], pending[n_step - 1][3], False)
+            pending.popleft()
 
         if step % train_every == 0 and len(agent.replay_buffer) >= min_buffer:
             try:
@@ -127,10 +181,20 @@ def train_episode(
         if done or truncated:
             break
 
+    # If the episode was cut short by ``max_steps`` (rather than the env's own
+    # terminal), flush whatever is still pending so no experience is silently
+    # dropped.
+    if pending:
+        remaining = list(pending)
+        for i in range(len(remaining)):
+            _emit(remaining[i:], remaining[-1][3], True)
+        pending.clear()
+
     return {
         "steps": step,
         "trades": trades,
         "portfolio_history": history,
         "final_value": history[-1],
         "avg_loss": float(np.mean(losses)) if losses else 0.0,
+        "diag": dict(getattr(agent, "last_diag", {})),
     }

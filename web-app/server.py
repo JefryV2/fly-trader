@@ -440,7 +440,9 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
         _history = [env.initial_cash]
         _trades.clear()
         _last_shaped_reward = 0.0
-        _reward_norm.reset()
+        # NB: the reward normaliser is deliberately *not* reset per episode — a
+        # consistent reward scale is what keeps the critic stable across
+        # episodes (see trainer.py).
 
     idx = min(env.current_step + env.window_size - 1, len(env.data) - 1)
     price = _safe_float(env.data.iloc[idx]["Close"])
@@ -617,9 +619,10 @@ def train_batch(payload: TrainBatchPayload):
     _split_bounds(split)  # validate early (raises 400 on bad split)
 
     for ep in range(n_episodes):
-        # Reset reward normalizer per episode for stable learning
-        _reward_norm.reset()
-        
+        # NB: the reward normaliser persists across episodes on purpose; a
+        # moving reward scale is one of the things that used to destabilise the
+        # critic (see trainer.py).
+
         # Curriculum learning: cycle through the assets
         ticker = MULTI_ASSET_TICKERS[ep % len(MULTI_ASSET_TICKERS)]
         # Train on the requested time slice only (default: everything before the

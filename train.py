@@ -142,6 +142,12 @@ def main():
     p.add_argument("--episodes", type=int, default=40)
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--lr-decay", type=float, default=0.99,
+                   help="per-episode multiplicative learning-rate decay (<=1.0). "
+                        "Lets a long run anneal instead of bouncing around.")
+    p.add_argument("--n-step", type=int, default=5,
+                   help="n-step return horizon for the critic/policy targets "
+                        "(1 = one-step TD, the old behaviour)")
     p.add_argument("--epsilon", type=float, default=0.30)
     p.add_argument("--epsilon-decay", type=float, default=0.99)
     p.add_argument("--reward-mode", choices=["shaped", "excess", "logret"], default="excess")
@@ -234,9 +240,11 @@ def main():
         ticker = tickers[ep % len(tickers)]
         env = make_env(ticker, "train", args)
         eps = max(0.05, args.epsilon * (args.epsilon_decay ** ep))
+        agent.set_lr(args.lr * (args.lr_decay ** ep))
         result = train_episode(
             agent, env, mask_preset=args.mask_preset, epsilon=eps,
             sharpe_blend=args.sharpe_blend, max_steps=max_steps, seed=args.seed + ep,
+            n_step=args.n_step,
         )
         ret = (result["final_value"] - env.initial_cash) / env.initial_cash * 100
         # Benchmark return over the same (possibly truncated) episode prefix.
@@ -249,9 +257,16 @@ def main():
                 bh_ret = (prices[i1] / prices[i0] - 1) * 100
         except Exception:
             pass
+        d = result.get("diag", {})
+        extra = ""
+        if d:
+            extra = (f" closs={d.get('critic_loss', 0.0):>7.3f}"
+                     f" vabs={d.get('value_abs_mean', 0.0):>6.2f}"
+                     f" H={d.get('entropy', 0.0):>5.2f}")
         print(f"[ep {ep + 1:>3}/{args.episodes}] {ticker} ret={ret:>8.2f}% "
               f"bh={bh_ret:>8.2f}% exc={ret - bh_ret:>7.2f}% "
-              f"trades={result['trades']:>4} loss={result['avg_loss']:>8.4f} eps={eps:.3f}")
+              f"trades={result['trades']:>4} loss={result['avg_loss']:>8.4f} "
+              f"eps={eps:.3f}{extra}")
 
         if (ep + 1) % args.eval_every == 0 or ep == args.episodes - 1:
             val = evaluate_split(agent, tickers, "val", args,
