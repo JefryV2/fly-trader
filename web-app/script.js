@@ -1827,7 +1827,7 @@ function drawPortfolioEquityChart() {
   const gy = v => padT + cH - ((v - ymin) / ((ymax - ymin) || 1)) * cH;
 
   ctx.font = '9px JetBrains Mono, monospace';
-  ctx.fillStyle = '#4e5e7a';
+  ctx.fillStyle = '#6d7f9c';
   ctx.textAlign = 'right';
   for (let t = 0; t <= 4; t++) {
     const v = ymin + (ymax - ymin) * t / 4;
@@ -1962,7 +1962,7 @@ function drawLearningHistoryChart() {
 
   // Episode numbers
   ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  ctx.font = `8px 'JetBrains Mono', monospace`;
+  ctx.font = `9px 'JetBrains Mono', monospace`;
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) {
     ctx.fillText(`${data[i].episode}`, gx(i) - 4, H - 4);
   }
