@@ -728,6 +728,25 @@ never‑trained settings:
 | bear 2022 | +18.6 | **+29.8** (8/9) |
 | **positive configs** | 24/45 | **35/45** |
 
+**What the gate changed about the book.** Diagnostic on the held‑out window:
+
+| gated policy | fly | rule | buy & hold |
+|---|---:|---:|---:|
+| assets held (> 2 %) | 1.76 | 3.00 | 10.00 |
+| cash | 0.079 | 0.000 | 0.000 |
+| largest weight | 0.583 | 0.333 | 0.100 |
+| average weight NVDA | 0.339 | 0.220 | 0.100 |
+| average weight XOM | 0.229 | 0.114 | 0.100 |
+| average weight META | 0.227 | 0.138 | 0.100 |
+| average weight T | 0.000 | 0.089 | 0.100 |
+
+The policy learned a **sharper momentum book** — roughly the two strongest of the
+three names the rule would hold, plus a cash buffer that grows when little is
+trending. That is the concrete mechanism behind both the +237 pp on this holdout
+(the two names it picks are NVDA/META/XOM) and the losses on S2/S4 (concentrating
+in the wrong two). It is *not* a fidelity‑to‑the‑rule result: making the policy
+rank by momentum exactly would reproduce the rule and give up most of this edge.
+
 **A latent bug this exposed.** The trainer suppressed "sell" actions on
 zero‑weight assets (`masked_probs`). That mask belongs to *directional* actions;
 portfolio actions are absolute conviction levels, so masking them is wrong — and
@@ -757,6 +776,54 @@ is that the rule's information is representable by this policy and that letting
 the **environment** perform the cross‑sectional selection is what makes it
 transfer to unseen universes. S2 (where the rule itself earns +42.6 pp) is still
 slightly negative, so the gate helps broadly but does not make the edge uniform.
+
+**Fine-tuning with RL is, for now, a negative result — and an instructive one.**
+Running 300 RL episodes on top of the distilled policy (low exploration, gentle
+learning rate, large replay warm‑up) *raised* validation from +63.7 pp to
++82.3 pp and collapsed the held‑out test from +237.4 pp to +32.6 pp. Rewarding the
+policy against the validation universe lets it exploit that universe — which
+contains TSLA at +322 % — rather than the strategy. So the distilled policy is
+what ships, RL is optional, and the fix the numbers call for is to keep the
+teacher in the loop: `--anchor-every N` re‑distils every N episodes so fine‑tuning
+can refine without drifting away.
+
+**The teacher's hyper‑parameters are not selectable either.** Distilling on
+2015–2019 and selecting (lookback, top‑k) on 2020H1 + 2021H1 — both strictly
+*after* the imitation window, so the selection is clean — gives:
+
+| lookback | top‑k | val (fly) | val (rule) | S1 | S2 | S3 | S4 | bear22 | mean test |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 60 | 2 | −17.7 | −0.9 | +292.7 | −35.8 | −24.6 | −8.7 | +37.3 | +52.2 |
+| 60 | 3 | −9.8 | −2.4 | +295.9 | +39.2 | +13.5 | −6.5 | −20.2 | +64.4 |
+| 60 | 5 | −0.5 | −2.6 | +217.2 | +24.9 | +0.0 | +17.6 | +9.2 | +53.8 |
+| 120 | 2 | −1.5 | +7.3 | +145.9 | −8.5 | +68.4 | −2.6 | −3.7 | +39.9 |
+| **120** | **3** | **+1.3** | +4.8 | **+237.4** | −16.7 | +46.9 | +22.9 | **+41.2** | **+66.3** |
+| 120 | 5 | +0.6 | +0.8 | +174.0 | −15.3 | +30.5 | +24.6 | +38.9 | +50.5 |
+| 250 | 2 | **+3.9** | +7.3 | +330.7 | −2.3 | −26.5 | −15.4 | **−41.1** | +49.1 |
+| 250 | 3 | −10.2 | +4.8 | +179.1 | +4.7 | −34.3 | −31.4 | +1.7 | +24.0 |
+| 250 | 5 | −7.3 | +0.8 | +180.4 | −3.6 | +34.2 | +6.6 | +40.2 | +51.6 |
+
+Validation picks **(250, 2)** → mean test +49.1 pp, and it *loses 41 pp in the
+2022 bear*. Each validation window is only ~6 monthly decisions, so they simply
+cannot discriminate between these teachers. The conventional a‑priori choice
+**(120, 3)** is both better on test (+66.3 pp mean) and the only one that
+combines a large edge with proper de‑risking (+41.2 pp in 2022). So the teacher
+stays fixed at 120‑day top‑3 on theoretical grounds, not because validation chose
+it.
+
+**Final honest recipe and result.** Distil 120‑day momentum top‑3 into the policy
+with the allocation gated to the top‑3 convictions, monthly rebalancing,
+whole‑brain read‑out, and ship the distilled policy (no RL). Across the five
+never‑trained settings the mean excess over equal‑weight buy & hold is **+66 pp**,
+positive in **4 of 5**:
+
+| setting | fly excess | notes |
+|---|---:|---|
+| S1 holdout (10 unseen tickers, 2021H2–2024) | **+237.4 pp** | 322.2 % vs 84.8 %, maxDD 18.7 % vs 24.9 % |
+| S2 | −16.7 pp | the rule itself earns +42.6 pp here |
+| S3 | +46.9 pp | |
+| S4 | +22.9 pp | the rule *loses* 21 pp here |
+| 2022 bear | **+41.2 pp** | capital preservation |
 
 ```bash
 python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \

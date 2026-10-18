@@ -285,6 +285,13 @@ def main():
                    help="learning rate for the supervised warm-start")
     p.add_argument("--imitate-log-every", type=int, default=0,
                    help="print imitation progress every N episodes (0 = silent)")
+    p.add_argument("--anchor-every", type=int, default=0,
+                   help="re-run the supervised distillation every N RL episodes to "
+                        "stop fine-tuning drifting away from the teacher (0 = off). "
+                        "Drift is the measured failure mode: it lifts validation but "
+                        "destroys out-of-sample performance.")
+    p.add_argument("--anchor-episodes", type=int, default=1,
+                   help="imitation episodes per re-anchor")
     p.add_argument("--cost", type=float, default=0.001)
     p.add_argument("--turnover-penalty", type=float, default=0.002,
                    help="explicit per-unit-turnover penalty added to the reward; "
@@ -438,6 +445,17 @@ def main():
               f"exc={ret - bh_train['total_return_pct']:>7.2f}% "
               f"loss={res['avg_loss']:>8.4f} eps={eps:.3f} "
               f"H={d.get('entropy', 0.0):.2f} {dt:.1f}s", flush=True)
+
+        # Periodically re-anchor to the distilled teacher. Without this the RL
+        # phase drifts away from the distilled policy and optimises the
+        # validation *universe* instead of the strategy (measured: val
+        # +63.7pp -> +82.3pp while the held-out test fell +237pp -> +33pp).
+        if args.anchor_every and (ep + 1) % args.anchor_every == 0:
+            imitate(agent, train_env, episodes=args.anchor_episodes,
+                    lookback=args.teacher_lookback, top_k=args.teacher_topk,
+                    lr=args.imitate_lr)
+            print(f"          [anchor] re-distilled on the teacher "
+                  f"({args.anchor_episodes} ep)", flush=True)
 
         if (ep + 1) % args.eval_every == 0 or ep == args.episodes - 1:
             val = evaluate(agent, tickers, args.plan, "val", args,
