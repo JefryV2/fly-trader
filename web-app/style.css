@@ -289,6 +289,7 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
 .chart-legend { display: flex; gap: .65rem; }
 .leg { font-size: .62rem; color: var(--txt-dim); display: flex; align-items: center; gap: .18rem; }
 .leg-port { color: #4ade80; }
+.leg-sharpe { color: #00e5ff; }
 .leg-bh   { color: var(--amber); }
 
 /* Brain card */
@@ -397,13 +398,14 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
 #right-col { display: flex; flex-direction: column; gap: .48rem; overflow: hidden; min-height: 0; }
 
 .tab-nav {
-  display: flex; gap: .28rem;
+  display: flex; gap: .26rem; flex-wrap: wrap;
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius); padding: .22rem; flex-shrink: 0;
 }
 .tab-btn {
-  flex: 1; padding: .3rem .38rem; border: none; border-radius: var(--radius-sm);
-  background: transparent; color: var(--txt-muted); font-size: .65rem; font-weight: 600;
+  flex: 1 1 auto; min-width: 0; padding: .3rem .34rem; border: none;
+  border-radius: var(--radius-sm);
+  background: transparent; color: var(--txt-muted); font-size: .63rem; font-weight: 600;
   cursor: pointer; transition: all .2s; white-space: nowrap; font-family: var(--ff);
 }
 .tab-btn:hover { color: var(--txt); }
@@ -524,6 +526,7 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
 .lab-pill-legend { font-size: .6rem; font-family: var(--ff-mono); color: var(--txt-dim); }
 .evo-chart-wrap { width: 100%; height: 155px; }
 #evo-chart { width: 100%; height: 100%; display: block; }
+#learn-history-chart { width: 100%; height: 160px; display: block; }
 .lab-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
 .plasticity-grid { display: grid; grid-template-columns: repeat(8,1fr); gap: 3px; margin-top: .38rem; }
 .p-cell { aspect-ratio: 1; border-radius: 3px; cursor: pointer; transition: transform .15s; }
@@ -709,30 +712,40 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
 .sim-mini-empty { font-size: .65rem; color: var(--txt-dim); text-align: center; padding: .6rem 0; }
 
 /* ── Portfolio (cross-section) tab ───────────────────────────────── */
-#portfolio-equity-chart { width: 100%; height: 170px; display: block; }
-.portfolio-legend-item {
-  display: inline-flex; align-items: center; gap: .28rem; color: var(--txt-muted);
+#portfolio-equity-chart { width: 100%; height: 168px; display: block; }
+.pf-legend {
+  display: flex; flex-wrap: wrap; gap: .1rem .8rem; margin-top: .35rem;
+  font-family: var(--ff-mono); font-size: .58rem;
 }
-.portfolio-legend-swatch {
-  width: 9px; height: 3px; border-radius: 2px; display: inline-block;
+.pf-legend-item {
+  display: inline-flex; align-items: center; gap: .28rem;
+  color: var(--txt-muted); white-space: nowrap;
+}
+.pf-legend-swatch {
+  width: 10px; height: 3px; border-radius: 2px; display: inline-block; flex: none;
 }
 .pf-table {
-  display: flex; flex-direction: column; gap: .18rem;
-  font-family: var(--ff-mono); font-size: .61rem;
+  display: flex; flex-direction: column; gap: .16rem;
+  font-family: var(--ff-mono); font-size: .6rem;
 }
 .pf-row {
-  display: grid; grid-template-columns: 1.6fr .9fr .9fr .7fr .8fr;
-  gap: .25rem; padding: .26rem .38rem; border-radius: 5px; align-items: center;
+  display: grid; grid-template-columns: 1.75fr .95fr .8fr .62fr .62fr;
+  gap: .28rem; padding: .26rem .38rem; border-radius: 5px; align-items: center;
+  white-space: nowrap;
 }
 .pf-row.head {
-  color: var(--txt-dim); text-transform: uppercase; font-size: .53rem;
-  letter-spacing: .05em;
+  color: var(--txt-dim); text-transform: uppercase; font-size: .51rem;
+  letter-spacing: .04em; padding-bottom: .18rem;
 }
-.pf-row.pf-best-row { background: rgba(0,229,255,.07); border: 1px solid rgba(0,229,255,.18); }
+.pf-row.pf-best-row { background: rgba(0,229,255,.07); box-shadow: inset 0 0 0 1px rgba(0,229,255,.22); }
 .pf-row.pf-fly-row .pf-name { color: #00e5ff; font-weight: 700; }
+.pf-name { overflow: hidden; text-overflow: ellipsis; }
 .pf-num { text-align: right; }
 .pf-pos { color: var(--green); }
 .pf-neg { color: var(--red); }
+.pf-config { font-size: .72rem; line-height: 1.5; }
+.pf-config b { color: var(--txt); font-weight: 600; }
+.pf-config .pf-dim { color: var(--txt-dim); }
 .pf-error { font-size: .62rem; color: var(--red); line-height: 1.6; }
 .pf-recipe {
   font-family: var(--ff-mono); font-size: .55rem; color: var(--txt-muted);

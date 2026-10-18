@@ -1701,10 +1701,10 @@ const PF_COLORS = {
   'mom120-top3-m': '#8c52ff',
 };
 const PF_LABELS = {
-  fly:             'Fly (portfolio)',
+  fly:             'Fly',
   'buy&hold':      'Buy & Hold',
   trend200:        'Trend 200d',
-  'mom120-top3-m': 'Momentum 120d top-3',
+  'mom120-top3-m': 'Momentum top-3',
 };
 const PF_ORDER = ['buy&hold', 'trend200', 'mom120-top3-m', 'fly'];
 
@@ -1730,6 +1730,7 @@ function _pfKpi(id, text, cls) {
 }
 
 function _pfPct(v) { return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`; }
+function _pfPct0(v) { return `${v >= 0 ? '+' : ''}${Math.round(v)}%`; }
 
 function renderPortfolio(d) {
   const table = $('portfolio-table');
@@ -1757,11 +1758,14 @@ function renderPortfolio(d) {
   const fl = s.fly, bh = s['buy&hold'];
 
   if (cfg) {
-    cfg.textContent =
-      `${d.n_assets} unseen tickers · ${d.plan}/${d.split} ${d.date_range[0]}→${d.date_range[1]}` +
-      ` · monthly rebalance · gate ${d.gate.mode}` +
-      (d.gate.mode === 'positive' ? ` [${d.gate.min_k},${d.gate.max_k}]` : '') +
-      ` · ${d.cost_bps} bps/side · ${d.full_readout ? 'whole-brain read-out' : 'MBON read-out'}`;
+    const gate = d.gate.mode === 'positive'
+      ? `${d.gate.mode} [${d.gate.min_k},${d.gate.max_k}]` : d.gate.mode;
+    cfg.innerHTML =
+      `<span class="pf-dim">${d.plan}/${d.split} · ` +
+      `${d.date_range[0].slice(0, 7)} → ${d.date_range[1].slice(0, 7)}</span><br>` +
+      `<b>${d.n_assets}</b> unseen tickers · monthly · ${d.cost_bps} bps/side<br>` +
+      `gate <b>${gate}</b> · ` +
+      `${d.full_readout ? 'whole-brain read-out' : 'MBON read-out'}`;
   }
 
   const exc = d.fly_excess_vs_buyhold_pp;
@@ -1817,7 +1821,7 @@ function drawPortfolioEquityChart() {
   const flat = curves.reduce((a, c) => a.concat(c), []);
   const ymin = Math.min(...flat), ymax = Math.max(...flat);
 
-  const padL = 36, padR = 8, padT = 10, padB = 16;
+  const padL = 40, padR = 8, padT = 10, padB = 16;
   const cW = W - padL - padR, cH = H - padT - padB;
   const gx = i => padL + (i / (n - 1)) * cW;
   const gy = v => padT + cH - ((v - ymin) / ((ymax - ymin) || 1)) * cH;
@@ -1830,7 +1834,14 @@ function drawPortfolioEquityChart() {
     const y = gy(v);
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-    ctx.fillText(_pfPct((Math.pow(10, v) - 1) * 100), padL - 5, y + 3);
+    ctx.fillText(_pfPct0((Math.pow(10, v) - 1) * 100), padL - 5, y + 3);
+  }
+
+  // break-even reference: equity = 1 (0% return)
+  const y0 = gy(0);
+  if (y0 > padT && y0 < padT + cH) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
   }
 
   const dates = portfolioData.curve_dates || [];
@@ -1855,7 +1866,7 @@ function drawPortfolioEquityChart() {
   const leg = $('portfolio-legend');
   if (leg) {
     leg.innerHTML = names.map(nm =>
-      `<span class="portfolio-legend-item"><span class="portfolio-legend-swatch" ` +
+      `<span class="pf-legend-item"><span class="pf-legend-swatch" ` +
       `style="background:${PF_COLORS[nm]}"></span>${PF_LABELS[nm] || nm}</span>`
     ).join('');
   }
@@ -1955,12 +1966,6 @@ function drawLearningHistoryChart() {
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) {
     ctx.fillText(`${data[i].episode}`, gx(i) - 4, H - 4);
   }
-
-  // Legend
-  ctx.font = `7px 'JetBrains Mono', monospace`;
-  ctx.fillStyle = '#22c55e'; ctx.fillText('Return%', padL, 9);
-  ctx.fillStyle = '#00e5ff'; ctx.fillText('Sharpe', padL + 45, 9);
-  ctx.fillStyle = '#8c52ff'; ctx.fillText('Win%', padL + 85, 9);
 }
 
 /* ─────────────────────────────────────────────
@@ -2325,6 +2330,7 @@ function handleResize() {
   threeCamera.updateProjectionMatrix();
   threeRenderer.setSize(W, H);
   drawPortfolioChart();
+  drawPortfolioEquityChart();
   drawRewardChart();
   drawLearningHistoryChart();
   drawOscilloscope();
