@@ -502,7 +502,9 @@ Two findings:
 With daily rebalancing the fly chased noise and lost to buy & hold by 37–46 pp
 (see the diagnosis below). Changing **only the decision horizon** to monthly —
 so the reward matches the horizon at which cross‑sectional momentum pays — makes
-the learned policy win, reproducibly, across four arms:
+the learned policy win on the original split, across four arms. The robustness, β
+and walk‑forward analyses further down all revise this downward: the honest
+expectation is a small edge of roughly **+3 pp**, not the +26 pp shown here.
 
 | arm (`rebalance_every=21`) | val excess | test fly % | test excess | Sharpe | maxDD % | bh maxDD % |
 |----------------------------|-----------:|-----------:|------------:|-------:|--------:|-----------:|
@@ -622,6 +624,64 @@ move is to keep convictions **flat**. β=8 converges to buy & hold outright
 (turnover 0.00, test 84.99 % vs bh 84.77 %). So the temperature must stay at 2
 during training; the evaluation‑time sharpening to β≈4–6 is real but, as shown
 above, not selectable.
+
+### Walk-forward validation: the fix for the selection bottleneck
+
+Every attempt to tune β failed for one reason: the single validation window
+(2020–2021H1) is a bull market, and in a bull market concentrating on whichever
+assets later won is optimal *in hindsight* — on any asset set, under any metric.
+Selection therefore always walks to the extreme, and nothing can be tuned.
+
+Walk-forward replaces that one window with folds that validate on the period
+immediately after their own training window, chosen so that most of them contain
+a real drawdown:
+
+| fold | train | validate | validation regime |
+|------|-------|----------|-------------------|
+| 0 | 2015‑01 → 2018‑06 | 2018‑07 → 2018‑12 | Q4‑2018 drawdown (bh −4.4 %) |
+| 1 | 2015‑01 → 2019‑12 | 2020‑01 → 2020‑06 | COVID crash (bh +2.3 %) |
+| 2 | 2015‑01 → 2020‑12 | 2021‑01 → 2021‑06 | bull (bh +9.6 %) — the old single window |
+
+All folds share the same held‑out test window (2021H2–2024 on the 10 unseen
+tickers), so fold results are directly comparable, and selecting β on the *fold
+mean* — which now includes two drawdown windows — is the honest test of whether
+β can be chosen at all. Fold 2 is exactly the setting used everywhere above, so
+it doubles as a control.
+
+```bash
+python train_portfolio.py --tickers <universe> --fold 0 \
+    --rebalance-every 21 --full-readout --episodes 400
+```
+
+**Results.** Each fold selects its checkpoint on its own validation window and is
+then tested once on the common held‑out window (2021H2–2024, 10 unseen tickers):
+
+| fold | validation regime | val excess | **test excess** | test maxDD % | turnover/step |
+|------|-------------------|-----------:|----------------:|-------------:|--------------:|
+| 0 | Q4‑2018 drawdown | +0.40 | **+8.40** | 26.9 | 0.02 |
+| 1 | COVID crash | +3.30 | **−1.81** | 24.1 | 0.01 |
+| 2 | bull (2021H1) | +3.47 | **+2.05** | 25.5 | 0.02 |
+| **mean** | | **+2.4** | **+2.9** | | |
+
+Two conclusions, neither flattering:
+
+1. **The +26 pp headline was split‑dependent.** Fold 2 differs from the original
+   `cycle` arm only in that training extends through 2020 and validation is
+   2021H1 (vs training through 2019 and validating on 2020–2021H1). That single
+   change moves the *same recipe* from +26.1 pp to +2.05 pp. The honest
+   expectation is the fold mean — roughly **+3 pp**, not +26 pp.
+2. **Walk‑forward did not make β truly selectable** — the fold‑mean validation
+   excess is still monotone in β — but it is now *harmless* rather than
+   catastrophic, because the two drawdown windows flatten the curve enormously
+   (β=1…8: +2.1 → +6.8 pp, against +18 → +138 pp on the single bull window).
+   Val‑selected β=8 delivers a mean test of **+4.76 pp**, versus +5.31 pp at β=6
+   and +3.15 pp at the a‑priori β=2. All of these are within noise of each other.
+
+**Bottom line.** The fly beats equal‑weight buy & hold on unseen cross‑sections by
+a small amount — of the order of **+3 pp** (range −1.8 to +8.4 across folds, +0.2
+to +26 across universes) — at low turnover and with no dependence on a lucky
+split. It does *not* approach the simple momentum rotation rule (+79 pp), which
+remains by far the strongest honest strategy in this repository.
 
 ```bash
 python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
@@ -815,7 +875,7 @@ hold by construction — it can only add value on top of it.
 | P1 | ✅ Deterministic feature encoding + live sensory channel (policy can see the market) |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
 | P0 | ✅ **Multi‑asset portfolio environment + baselines** (`portfolio_env.py`, `run_portfolio.py`) |
-| P0 | ✅ **Fly beats buy & hold out of sample on unseen portfolios** (+26 pp on the original holdout; **+5.6 pp mean, 3/4**, across disjoint never‑trained sets) |
+| P0 | ✅ **Fly beats buy & hold on unseen portfolios, honestly by a small margin** (+26 pp on the original split, +2.9 pp walk‑forward fold mean, +5.6 pp across disjoint never‑trained sets) |
 | P0 | ✅ **Softmax conviction allocation** with an explicit turnover penalty (fixes churn) |
 | P1 | ✅ **Whole‑brain read‑out** (`--full-readout`: all regions feed the policy) |
 | P1 | ✅ **Portfolio trainer** (`train_portfolio.py`) — learn the cross‑section allocation |

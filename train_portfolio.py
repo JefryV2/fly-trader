@@ -48,7 +48,8 @@ ROOT = Path(__file__).resolve().parent
 import sys
 sys.path.insert(0, str(ROOT))  # noqa: E402
 
-from config import CHECKPOINT_DIR, SPLIT_PLANS, TICKERS  # noqa: E402
+from config import (CHECKPOINT_DIR, SPLIT_PLANS, TICKERS,  # noqa: E402
+                    WALKFORWARD_FOLDS, WALKFORWARD_TEST)
 from fly_brain import FlyBrainAgent  # noqa: E402
 from portfolio_env import PortfolioEnv, buy_hold_weights, run_static_weights  # noqa: E402
 from trainer import RewardNormalizer  # noqa: E402
@@ -61,8 +62,28 @@ def split_dates(plan: str, split: str):
     return SPLIT_PLANS[plan][split]
 
 
+def fold_dates(args, split: str):
+    """Resolve the window for ``split`` taking ``--fold`` into account.
+
+    With ``--fold N`` the train/val windows come from ``WALKFORWARD_FOLDS[N]``
+    (validation is the period right after that fold's training window, so the
+    first fold validates on the 2018 bear market) and the test window is the
+    common full cycle. Without ``--fold`` this is the plain split plan.
+    """
+    fold = getattr(args, "fold", None)
+    if fold is not None:
+        tr_s, tr_e, va_s, va_e = WALKFORWARD_FOLDS[fold]
+        if split == "train":
+            return tr_s, tr_e
+        if split == "val":
+            return va_s, va_e
+        if split == "test":
+            return WALKFORWARD_TEST
+    return split_dates(args.plan, split)
+
+
 def make_env(tickers, plan, split, args) -> PortfolioEnv:
-    start, end = split_dates(plan, split)
+    start, end = fold_dates(args, split)
     return PortfolioEnv(
         tickers, start_date=start, end_date=end, window_size=30,
         use_xsection=args.use_xsection, transaction_cost=args.cost,
@@ -168,6 +189,12 @@ def main():
     p.add_argument("--holdout", default=DEFAULT_HOLDOUT,
                    help="tickers excluded from training and used for the final OOS report")
     p.add_argument("--plan", default="cycle_b", choices=list(SPLIT_PLANS))
+    p.add_argument("--fold", type=int, default=None, choices=range(len(WALKFORWARD_FOLDS)),
+                   help="walk-forward fold index. Overrides the plan's train/val "
+                        "windows with WALKFORWARD_FOLDS[fold] and tests on the "
+                        "common full cycle. Fold 0 validates on the 2018 bear "
+                        "market, which is what makes selection able to rank "
+                        "concentration (a single bull val window cannot).")
     p.add_argument("--episodes", type=int, default=200)
     p.add_argument("--eval-every", type=int, default=10)
     p.add_argument("--lr", type=float, default=3e-4)

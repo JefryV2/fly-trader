@@ -118,6 +118,24 @@ SPLIT_PLANS = {
         "test":  ("2021-07-01", "2024-12-31"),
     },
 }
+
+# ── Walk-forward folds ─────────────────────────────────────────────────────
+# The single validation window above is a bull market (2020-2021H1) and cannot
+# rank how aggressively the policy concentrates: in hindsight, concentrating on
+# whichever assets later won always looks best, so *every* validation metric
+# (return, Sharpe, drawdown) is monotone in concentration and selection walks to
+# the extreme. Walk-forward replaces that one window with several folds, each
+# validated on the period *immediately after* its own training window -- and the
+# first fold's validation window is the 2018 bear market, where concentration is
+# punished rather than rewarded. The test window is the same full cycle
+# (2021H2-2024) in every fold, so fold results are directly comparable.
+# Each fold: (train_start, train_end, val_start, val_end).
+WALKFORWARD_FOLDS = [
+    ("2015-01-01", "2018-06-30", "2018-07-01", "2018-12-31"),  # val = Q4-2018 drawdown
+    ("2015-01-01", "2019-12-31", "2020-01-01", "2020-06-30"),  # val = COVID crash
+    ("2015-01-01", "2020-12-31", "2021-01-01", "2021-06-30"),  # val = bull (the single window)
+]
+WALKFORWARD_TEST = ("2021-07-01", "2024-12-31")
 SPLITS = SPLIT_PLANS["default"]
 TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]
 
