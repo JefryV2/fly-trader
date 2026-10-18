@@ -59,6 +59,7 @@ def make_env(ticker, split, args):
         indicator_norm=args.indicator_norm,
         reward_mode=args.reward_mode,
         dd_penalty=args.dd_penalty,
+        use_xsection=getattr(args, "use_xsection", False),
     )
 
 
@@ -135,6 +136,13 @@ def main():
     p = argparse.ArgumentParser(description="Train the FlyTrader agent offline")
     p.add_argument("--ticker", default="AAPL")
     p.add_argument("--all-tickers", action="store_true")
+    p.add_argument("--tickers", default=None,
+                   help="comma-separated training universe, overriding --all-tickers/"
+                        "--ticker (e.g. a broad cross-section). Use with --holdout to "
+                        "reserve tickers the model never trains on.")
+    p.add_argument("--holdout", default=None,
+                   help="comma-separated tickers excluded from training and used for the "
+                        "final out-of-sample test report (ticker-holdout generalisation).")
     p.add_argument("--plan", choices=list(SPLIT_PLANS), default="default",
                    help="split plan: 'default' (test 2024 bull), 'bear2022' "
                         "(test the 2022 drawdown) or 'cycle' (train<=2019, "
@@ -180,6 +188,11 @@ def main():
                    help="indicator scaling; must match the eval/serving path. "
                         "Default per_feature (the shipped checkpoints use it). "
                         "'block' is legacy for old checkpoints.")
+    p.add_argument("--xsection", dest="use_xsection", action="store_true",
+                   help="append the cross-sectional (universe-relative) feature block "
+                        "to the observation: relative momentum ranks, range position, "
+                        "breadth, market trend. Requires data/xsection_panel.npz "
+                        "(build it with: python build_xsection.py).")
     p.add_argument("--sl-tp", action="store_true")
     p.add_argument("--max-steps", type=int, default=0,
                    help="cap steps per training episode (0 = full split); speeds up experiments")
@@ -187,13 +200,24 @@ def main():
     p.add_argument("--no-connectome", dest="use_connectome", action="store_false")
     p.add_argument("--n-neurons", type=int, default=1024)
     p.add_argument("--out", default=str(CHECKPOINT_DIR / "fly_brain_trained.pt"))
+    p.add_argument("--resume", action="store_true",
+                   help="continue from <out>.latest if present (reboot/power-cut safe). "
+                        "The latest checkpoint is written every --latest-every episodes "
+                        "and removed on a clean finish.")
+    p.add_argument("--latest-every", type=int, default=1,
+                   help="write the resume checkpoint (<out>.latest) every N episodes.")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    tickers = TICKERS if args.all_tickers else [args.ticker]
+    if args.tickers:
+        tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    else:
+        tickers = TICKERS if args.all_tickers else [args.ticker]
+    holdout = [t.strip().upper() for t in (args.holdout or "").split(",") if t.strip()]
+    tickers = [t for t in tickers if t not in holdout]
     tickers = usable_tickers(tickers, args)
     if not tickers:
         raise SystemExit(f"No tickers have enough data for plan '{args.plan}'")
@@ -201,16 +225,37 @@ def main():
     obs_dim = int(probe.observation_space.shape[0])
     print(f"[train] plan={args.plan} obs_dim={obs_dim} reward_mode={args.reward_mode} "
           f"mask={args.mask_preset} select_by={args.select_by} "
-          f"buy_margin={0.35 if args.buy_margin else 0.0}")
+          f"xsection={args.use_xsection} buy_margin={0.35 if args.buy_margin else 0.0}")
     print(f"[train] tickers={tickers}")
     print(f"[train] splits={plan(args)}")
 
-    agent = FlyBrainAgent(obs_dim=obs_dim, use_connectome=args.use_connectome, N_NEURONS=args.n_neurons)
+    agent = FlyBrainAgent(obs_dim=obs_dim, use_connectome=args.use_connectome, N_NEURONS=args.n_neurons,
+                          use_xsection=args.use_xsection)
     agent.optimizer.param_groups[0]["lr"] = args.lr
     agent.buy_margin_coef = 0.35 if args.buy_margin else 0.0
     agent.action_floor = args.action_floor
     if args.target_entropy is not None:
         agent.target_entropy = float(args.target_entropy)
+
+    # --- Reboot/power-cut-safe resume -------------------------------------
+    # The `--out` checkpoint holds the *best* policy (a plain state dict, so the
+    # server/eval paths can load it unchanged). The `<out>.latest` file holds the
+    # *most recent* policy plus bookkeeping (next episode, best score), and is
+    # what --resume reads. It is deleted after a clean finish.
+    latest_path = args.out + ".latest"
+    start_ep, saved, best_score, resumed = 0, False, None, False
+    if args.resume and Path(latest_path).exists():
+        ck = torch.load(latest_path, map_location="cpu", weights_only=False)
+        agent.set_policy_state(ck.get("state", ck))
+        meta = ck.get("meta", {}) if isinstance(ck, dict) else {}
+        start_ep = int(meta.get("next_ep", 0))
+        saved = bool(meta.get("saved", False))
+        best_score = meta.get("best_score", None)
+        resumed = True
+        print(f"[train] RESUME from {latest_path}: ep={start_ep}/{args.episodes} "
+              f"best_score={best_score} saved={saved}")
+    elif args.resume:
+        print(f"[train] --resume set but {latest_path} not found -> starting fresh")
 
     # Snapshot the buy & hold prior. If training never beats the benchmark on
     # validation we ship this instead, so the deployed policy is never worse
@@ -222,21 +267,27 @@ def main():
     # Selection guard. The prior *is* buy & hold, so evaluating it on the
     # validation slice gives the benchmark's own score; we only ship a learned
     # checkpoint that beats that. For the excess objective the threshold is
-    # exactly 0 (0 == matching the benchmark).
-    baseline = evaluate_split(agent, tickers, "val", args, deterministic=True, n_seeds=1)
-    if not args.guard:
-        guard = -1e9
-    elif args.select_by == "val_excess":
-        guard = 0.0
-    elif args.select_by == "val_sharpe":
-        guard = baseline["mean_sharpe"]
+    # exactly 0 (0 == matching the benchmark). On a resume we already know the
+    # running best_score, so the (expensive) baseline eval is skipped.
+    need_baseline = not (resumed and best_score is not None)
+    if need_baseline:
+        baseline = evaluate_split(agent, tickers, "val", args, deterministic=True, n_seeds=1)
+        if not args.guard:
+            guard = -1e9
+        elif args.select_by == "val_excess":
+            guard = 0.0
+        elif args.select_by == "val_sharpe":
+            guard = baseline["mean_sharpe"]
+        else:
+            guard = baseline["mean_buyhold"]
+        print(f"[train] buy&hold val baseline: ret={baseline['mean_buyhold']:.2f}% "
+              f"sharpe={baseline['mean_sharpe']:.3f}  ->  ship threshold={guard:.3f} ({args.select_by})")
+        if best_score is None:
+            best_score = guard
     else:
-        guard = baseline["mean_buyhold"]
-    print(f"[train] buy&hold val baseline: ret={baseline['mean_buyhold']:.2f}% "
-          f"sharpe={baseline['mean_sharpe']:.3f}  ->  ship threshold={guard:.3f} ({args.select_by})")
-    best_score = guard
-    saved = False
-    for ep in range(args.episodes):
+        print(f"[train] resume: skipping baseline eval; best_score={best_score}")
+    best_score = float(best_score)
+    for ep in range(start_ep, args.episodes):
         ticker = tickers[ep % len(tickers)]
         env = make_env(ticker, "train", args)
         eps = max(0.05, args.epsilon * (args.epsilon_decay ** ep))
@@ -281,6 +332,17 @@ def main():
             print(f"          VAL fly={val['mean_fly']:>8.2f}% bh={val['mean_buyhold']:>8.2f}% "
                   f"excess={val['mean_excess']:>7.2f}% sharpe={val['mean_sharpe']:.3f}{tag}")
 
+        # Reboot/power-cut safety: persist the *latest* (not just best) policy so
+        # a long run can be resumed with --resume without losing progress.
+        if (ep + 1) % args.latest_every == 0 or ep == args.episodes - 1:
+            torch.save(
+                {"state": agent.get_policy_state(),
+                 "meta": {"next_ep": ep + 1, "best_score": best_score,
+                          "saved": saved, "select_by": args.select_by,
+                          "reward_mode": args.reward_mode}},
+                latest_path,
+            )
+
     print(f"\n[train] best validation score ({args.select_by}) = {best_score:.3f}  ->  {args.out}")
     if not saved:
         # Nothing beat buy & hold on validation: fall back to the prior, which
@@ -291,10 +353,21 @@ def main():
         print("[train] no checkpoint beat buy & hold on validation -> "
               "shipping the buy & hold prior (ties the benchmark)")
 
+    # Clean finish: drop the resume checkpoint so a re-run starts fresh.
+    if Path(latest_path).exists():
+        try:
+            Path(latest_path).unlink()
+            print(f"[train] clean finish: removed resume checkpoint {latest_path}")
+        except OSError:
+            pass
+
     # Final out-of-sample test report (deterministic = greedy deployment policy).
     if Path(args.out).exists():
         agent.set_policy_state(torch.load(args.out, map_location="cpu", weights_only=False))
-    test = evaluate_split(agent, tickers, "test", args, deterministic=True, n_seeds=1)
+    report_tickers = holdout or tickers
+    if holdout:
+        print(f"\n[train] TICKER-HOLDOUT test on {len(holdout)} unseen tickers: {holdout}")
+    test = evaluate_split(agent, report_tickers, "test", args, deterministic=True, n_seeds=1)
     print("\n=== Out-of-sample TEST (deterministic, honest mask) ===")
     header = (f"{'ticker':<8} {'fly%':>9} {'buyhold%':>10} {'excess%':>9} "
               f"{'sharpe':>8} {'flyMaxDD%':>10} {'bhMaxDD%':>9} {'trades':>7}")
@@ -314,7 +387,7 @@ def main():
 
     # Stochastic test: samples the learned action distribution (what the policy
     # actually believes) rather than its single greedy mode.
-    test_s = evaluate_split(agent, tickers, "test", args,
+    test_s = evaluate_split(agent, report_tickers, "test", args,
                             deterministic=False, n_seeds=args.val_seeds)
     print(f"[train] out-of-sample (sampled, {args.val_seeds} seeds): "
           f"fly={test_s['mean_fly']:>8.2f}% bh={test_s['mean_buyhold']:>8.2f}% "

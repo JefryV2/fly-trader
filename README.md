@@ -82,6 +82,11 @@ fly-trader/
 │   strategy.py                # Shared masking, action selection, baselines, metrics, roll‑out
 │   trainer.py                 # Reusable online training episode
 │   train.py                   # Offline trainer: train → validate → test vs baselines
+│   portfolio_env.py           # Multi-asset long-only portfolio environment (softmax allocation)
+│   train_portfolio.py         # Multi-asset trainer: learn the cross-section allocation
+│   run_portfolio.py           # Portfolio baselines (buy&hold / trend200 / momentum) + fly
+│   xsection.py                # Cross-sectional (universe-relative) features
+│   build_xsection.py          # Build data/xsection_panel.npz
 │   data_fetch.py              # Historical data downloader
 │   evaluate.py                # (legacy) real‑time evaluation script
 │   scripts/
@@ -428,7 +433,303 @@ Three bugs made the server's "Train" button worse than useless:
 
 
 
+## Multi‑asset portfolio trading (2026‑10 scope expansion)
+
+Everything above trades **one ticker at a time**. The scope is now a whole
+**cross‑section**: the same single‑asset policy is applied to every asset each
+step and allocates capital across the book.
+
+```bash
+python run_portfolio.py --plan cycle_b --split test        # baselines + fly
+python train_portfolio.py --plan cycle_b --episodes 400    # learn the allocation
+```
+
+### Allocation rule (the important design choice)
+
+Each asset's 7‑way action is read as a **conviction** `d_a ∈ [-1, 1]`
+(`[Hold, Buy25, Buy50, Buy100, Sell25, Sell50, Sell100] → [0, .25, .6, 1, -.25, -.6, -1]`)
+and the convictions are turned into weights by a **softmax over one fixed budget
+that includes a cash slot**:
+
+```
+w_a  = exp(beta * d_a) / (exp(0) + sum_b exp(beta * d_b))     # beta = 2
+cash = 1 / (exp(0) + sum_b exp(beta * d_b))
+```
+
+This matters. The first version used *independent* per‑asset target weights, but
+the reward `w_a * ret_a` is monotone in `w_a`, so each asset's head is pushed to
+"all‑in" — and after renormalisation that is *exactly equal weight = buy & hold*,
+a degenerate optimum. Worse, the trained single‑asset checkpoints oscillate in
+that setting: **−9.7 % with 8,376 trades** on the held‑out portfolio. The softmax
+rewards `ret_a - ret_portfolio` instead, i.e. *tilting into the relatively
+strongest names* plus *raising cash when the whole cross‑section falls* (the cash
+slot earns 0) — the multi‑asset generalisation of the trend edge below.
+
+The per‑asset reward is decomposed and **immediate**, so the shared policy gets a
+clean local credit signal:
+
+```
+r_a = w_a * ret_a − cost_a − turnover_penalty * |dw_a|
+```
+
+`turnover_penalty` is the direct, explicit fix for the churn measured in the
+cross‑sectional single‑asset run (~360 trades ≈ −70 pp of cost).
+
+### Held‑out portfolio results (`cycle_b` test = 2021H2–2024, 10 unseen tickers)
+
+Equal‑weight, long‑only, transaction costs (10 bps) included:
+
+| strategy | return % | maxDD % | Sharpe | turnover |
+|----------|---------:|--------:|-------:|---------:|
+| buy & hold (equal weight) | 84.2 | 25.8 | 1.14 | 1 |
+| `trend200` daily | **134.9** | 23.9 | **1.51** | 76 |
+| `trend200` weekly | 122.5 | 26.9 | 1.44 | 32 |
+| momentum 120d top‑3 (monthly) | **162.5** | 28.8 | 1.32 | 21 |
+| fly, *untrained prior* (softmax allocation) | 82.9 | 25.4 | 1.14 | ~0 |
+
+Two findings:
+1. **The cross‑section is where the return is.** Rotating across 10 tickers beats
+   equal‑weight buy & hold by **+50 to +78 pp** out of sample — far more than any
+   single‑asset timing trick found above. This is the multi‑asset
+   generalisation of the `trend200` edge.
+2. **The allocation rule, not the features, caused the churn.** With the
+   softmax‑budget allocation the *untrained* prior already tracks buy & hold with
+   near‑zero turnover (`turnover/step ≈ 0.00`), so churn is a fixable property of
+   the action semantics rather than something the policy must learn to avoid.
+
+### The learned fly beats buy & hold out of sample (monthly rebalance)
+
+With daily rebalancing the fly chased noise and lost to buy & hold by 37–46 pp
+(see the diagnosis below). Changing **only the decision horizon** to monthly —
+so the reward matches the horizon at which cross‑sectional momentum pays — makes
+the learned policy win, reproducibly, across four arms:
+
+| arm (`rebalance_every=21`) | val excess | test fly % | test excess | Sharpe | maxDD % | bh maxDD % |
+|----------------------------|-----------:|-----------:|------------:|-------:|--------:|-----------:|
+| H no position obs | +14.9 | **111.3** | **+26.5** | **1.29** | **19.3** | 24.9 |
+| F **whole‑brain read‑out** | **+33.5** | 111.0 | **+26.1** | 1.25 | 19.3 | 24.9 |
+| E baseline read‑out | +11.4 | 105.4 | +20.6 | 1.20 | 20.2 | 24.9 |
+| G cross‑sectional + brain | +30.4 | 97.1 | +12.3 | 1.10 | 24.5 | 24.9 |
+| `--target-entropy 0.5` (still running) | +0.6 / +3.6 | — | — | — | — | — |
+
+Held‑out test = 2021H2–2024 on **10 tickers the model never trained on**, equal
+weight long‑only, 10 bps per side. Under the honest protocol the val‑selected
+checkpoint is F (whole‑brain, val +33.5 pp), which lands at **+25–26 pp out of
+sample with a lower drawdown than buy & hold** (19.3 % vs 24.9 %) and a better
+Sharpe (1.25 vs 1.04). Verified through two independent code paths
+(`train_portfolio.evaluate` and `run_portfolio.run_fly`), which agree to ~0.4 pp.
+Turnover is ~21 units over 58 monthly decisions (≈0.02/step, ~380 small trades),
+so this is not a cost‑churn artefact.
+
+**But one portfolio in one window is a single sample.** Re‑running the same
+val‑selected checkpoint across *disjoint* sets of never‑trained tickers and
+across regimes (greedy, `--full-readout`, monthly) shows the edge is real but
+much smaller on average than the headline:
+
+| case (10 tickers, monthly) | fly % | bh % | **excess** | mom % | trend % | maxDD fly/bh |
+|---|---:|---:|---:|---:|---:|---:|
+| cycle test (2021H2–24), original holdout | 110.9 | 84.8 | **+26.1** | 163.6 | 105.2 | 19.3 / 24.9 |
+| bear2022 test (2022) | 1.2 | −4.6 | **+5.8** | 0.9 | 5.3 | 16.9 / 18.8 |
+| default test (2024) | 21.1 | 28.0 | −6.9 | 43.5 | 28.2 | 3.6 / 3.3 |
+| subset S2 (ABBV…CSCO) | 33.8 | 33.6 | +0.2 | 76.2 | 43.5 | 20.1 / 21.7 |
+| subset S3 (CVX…MS) | 61.4 | 58.1 | +3.3 | 132.8 | 68.4 | 12.7 / 12.2 |
+| subset S4 (NFLX…WFC) | 5.4 | 12.7 | −7.3 | 5.4 | −3.4 | 25.1 / 25.1 |
+
+Across the four **disjoint never‑trained** portfolios the fly beats buy & hold by
+a mean of **+5.6 pp** (median +1.7 pp), winning 3 of 4, and it wins the 2022 bear
+by +5.8 pp with less drawdown. So the honest claim is: **the fly has a small,
+positive, but noisy edge over buy & hold on unseen cross‑sections** — the +26 pp
+figure is the top of that distribution, not the expected value. It also trails
+the simple momentum rule everywhere, which is the stronger, lower‑variance
+cross‑sectional signal.
+
+### The allocation temperature β is a first‑class lever
+
+Allocation is `w = softmax(beta * conviction)`. With β=2 and the small
+conviction differences the policy actually produces, the book stays close to
+equal weight — i.e. close to buy & hold — regardless of what the policy has
+learned. Sweeping β **at evaluation time** on the same checkpoint (no
+retraining, so this is a pure read‑out of what the policy already knows):
+
+| β | val excess | test excess | test maxDD % |
+|---:|---:|---:|---:|
+| 1 | +0.96 | +11.3 | 19.8 |
+| 2 *(trained at)* | +5.4 | +26.1 | 19.3 |
+| 3 | +10.6 | +30.1 | 19.3 |
+| 4 | +11.1 | +32.4 | 19.4 |
+| 6 | +17.2 | **+33.0** | 19.4 |
+| 8 *(val‑selected)* | **+34.3** | +7.8 | 23.5 |
+| 12 | +31.4 | +12.4 | 22.8 |
+
+Test improves **monotonically in β up to 6** and collapses only at the top end.
+The policy contains a far stronger tilt than β=2 exposes: it was trained under a
+temperature that is too soft for the convictions it learns.
+
+**But β cannot be selected on validation** — this is the important caveat. Using
+the *same* selection surface as the trainer (val = the 12‑asset training
+universe, test = the 10 unseen tickers):
+
+| β | val fly % (train universe) | val excess | test excess (unseen) |
+|---:|---:|---:|---:|
+| 1 | 73.5 | +18.6 | +11.3 |
+| 2 *(trained at)* | 101.6 | +46.7 | +26.1 |
+| 3 | 127.4 | +72.5 | +30.1 |
+| 4 | 145.7 | +90.8 | +32.4 |
+| 6 | 169.6 | +114.7 | **+33.0** |
+| 8 | 185.1 | +130.2 | +7.8 |
+| 12 *(val‑selected)* | **193.3** | **+138.3** | +12.4 |
+
+Validation rises monotonically in β out to the corner — in a bull val window,
+concentrating on the best train‑universe assets always wins *in hindsight*, so
+val can never rank a temperature. A val‑selected β would ship β=12 and land at
++12.4 pp, when β=6 would have delivered +33.0 pp. So the "+33 pp" figure is
+**test‑selected and is not a shippable result**; the honest deliverable keeps β=2
+fixed a priori. This is the same bull‑window selection trap documented for
+`cycle_b`, now appearing in a continuous hyper‑parameter.
+
+Two further attempts to make β selectable were tested and also failed:
+- **Selecting on a *validation‑holdout* universe** — 20 tickers the model never
+  trained on, disjoint from the test holdout. Mean excess still rose
+  monotonically with β (+5.2, +11.4, +19.7, +31.8, +47.8, +51.5, +53.3 pp for
+  β = 1…12) and still selected β=12 (+12.4 pp test). The problem is the
+  **window**, not the universe: in a bull market, concentrating on whichever
+  assets later won is rewarded in hindsight on *any* asset set.
+- **A hindsight‑proof score** — val return minus the return of the best single
+  asset, so that holding the hindsight winner scores exactly 0. Also monotone
+  (−248 → −129 pp across β=1…12), because the val universe contains **TSLA at
+  +322 %**, so any lean toward it improves the score.
+
+**Conclusion: β is an a‑priori choice, not a tuned one.** That is acceptable here
+only because the test curve is a plateau — β = 2/3/4/6 give
++26.1/+30.1/+32.4/+33.0 pp — so the shipped β=2 sits inside the flat region and
+nothing needs to be selected. The deeper lesson is that a **single bull
+validation window cannot rank concentration**, which is the binding constraint on
+how much of the momentum edge the fly can honestly claim.
+
+Training *at* the sharper temperature does **not** help — it collapses to
+buy & hold:
+
+| trained at | val excess (selected checkpoint) | test excess | test maxDD % | turnover/step |
+|---|---:|---:|---:|---:|
+| **β=2 (shipped)** | +33.5 | **+26.1** | 19.3 | 0.02 |
+| β=4 | +25.9 | +5.8 | 23.4 | 0.01 |
+| β=6 | +0.1 | +0.6 | 23.4 | 0.01 |
+| β=8 | −1.5 | +0.2 | 23.4 | 0.00 |
+
+At high β the early, near‑random convictions are amplified into large allocation
+swings, so the reward becomes high‑variance and the policy learns that the safe
+move is to keep convictions **flat**. β=8 converges to buy & hold outright
+(turnover 0.00, test 84.99 % vs bh 84.77 %). So the temperature must stay at 2
+during training; the evaluation‑time sharpening to β≈4–6 is real but, as shown
+above, not selectable.
+
+```bash
+python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
+    --plan cycle --episodes 400 --rebalance-every 21 --full-readout
+python run_portfolio.py --plan cycle --split test --rebalance-every 21 --full-readout \
+    --ckpt <out>
+```
+
+**Three ingredients were each necessary**: (1) the multi‑asset scope with the
+softmax conviction allocation, (2) the monthly horizon so the reward is not
+next‑day noise, and (3) the whole‑brain read‑out, which gives the best validation
+score of any arm (+33.5 pp) — the "connect all the brain" change contributes here.
+Two tempting knobs were tested and rejected: an explicit `turnover_penalty` (the
+agent churned anyway at a daily horizon) and `--target-entropy 0.5` (much worse
+than the agent's own 1.30 in the monthly setting: +0.6/+3.6 pp val).
+
+The fly captures roughly a third of the simple momentum rule's excess
+(+26 pp of +79 pp) while trading differently and holding less risk than
+buy & hold; `trend200` remains the better pure risk‑adjusted rule
+(Sharpe 1.37, maxDD 17.4 %).
+
+### Why the fly churned: the reward *horizon*, not the features
+
+Three daily‑rebalanced arms were trained to 400 episodes on the 12‑asset
+universe (`cycle` plan, selection on validation, buy & hold guard active):
+
+| arm | change vs baseline | val fly vs bh | val turnover/step | holdout test vs bh |
+|-----|--------------------|--------------:|------------------:|-------------------:|
+| A | — (baseline read‑out) | **+13.9 pp** (best) | 0.34 | **−46.4 pp** |
+| B | `--full-readout` (whole brain) | +11.3 pp (best) | **0.15** | −36.8 pp |
+| C | `--xsection` (relative strength) | −38.1 pp (never beat the guard) | 0.26 | — |
+
+All three *lost badly* out of sample, and the reason is not the features:
+- **In sample on its own training data** the greedy daily policy *also* churns —
+  10,213 micro‑trades, turnover 417 over 1,228 bars — and still trails buy &
+  hold (118.4% vs 130.0%). So the churn is not a test‑time distribution shift.
+- At ~0.35 turnover/step × 10 bps, the **transaction‑cost drag alone is ≈26%**
+  over the test window. The policy is not adding alpha; it is paying to trade.
+- The per‑asset reward at a daily horizon is `w·ret_{1d}`, and the conditional
+  edge of these features on *next‑day* returns is ≈0 (measured earlier). The
+  gradient is therefore dominated by unpredictable daily noise — the policy
+  chases it. The cross‑sectional momentum edge is real but it accrues over
+  ~60–120 days.
+- Two tempting fixes were tested and rejected: adding an explicit
+  `turnover_penalty` twice the actual cost (the agent still churned), and zeroing
+  the position block to break the "hold a lot → sell → hold little → buy" limit
+  cycle (turnover did **not** fall). The churn survived both — it is a property
+  of the *reward horizon*.
+
+### The fix: rebalance on the horizon where the edge lives
+
+`PortfolioEnv(rebalance_every=21)` makes one decision per month, so the reward
+is the 21‑bar return — the horizon at which cross‑sectional momentum actually
+pays. The effect is immediate and large:
+
+| | daily (`rebalance_every=1`) | monthly (`=21`) |
+|---|---:|---:|
+| validation turnover/step | 0.34 | **0.003** |
+| seconds per training episode | ~30 | **~1.5** |
+| momentum top‑3 (holdout, vs bh 84.8) | 162.5 | **163.6** |
+
+The learned policy stops churning the moment the reward matches the horizon of
+the signal. Sharpe is also annualised per *decision* now (√12 for monthly, not
+√252), so monthly and daily numbers are not directly comparable.
+
+### Which split to select on (a real trap)
+
+Model selection uses the **validation** split only, so the validation window must
+contain the edge you are trying to learn. On the 12‑asset training universe:
+
+| split | buy & hold | trend200‑w | momentum‑top3 |
+|-------|-----------:|-----------:|--------------:|
+| `cycle` train (2015–2019) | 222.2 | 163.4 | **304.2** |
+| `cycle` **val** (2020–2021H1, incl. COVID) | 55.0 | 76.7 | **104.9** |
+| `cycle_b` **val** (2021H1, bull only) | **9.9** | 3.4 | 2.9 |
+| `cycle`/`cycle_b` test (2021H2–2024, holdout) | 84.2 | 122.5 | **162.5** |
+
+`cycle_b`'s 6‑month bull validation window *rewards buy & hold and rejects every
+rotation rule* — selecting on it can only ever ship the buy & hold prior, even
+though the same rotation rule wins by +50 pp on train and +78 pp on test. The
+portfolio runs therefore use `cycle`, whose validation window spans the COVID
+crash and recovery and ranks the rotation rules the same way the test window
+does. (The test window is identical in both plans, so results stay comparable.)
+
+
+
+### "Connect all the brain" — whole‑brain read‑out
+
+The read‑out used to see only the mushroom‑body output (MBON) plus the sensory
+summary, i.e. it ignored Antennal Lobe, Kenyon Cells, Central Complex and the
+dopaminergic neurons. A diagnostic confirmed every region is alive and
+input‑dependent (MBON emitted 52/60 distinct patterns over 60 real observations;
+the "all‑zero MBON" comment in older docs is stale), so the fix is *how* the read‑out
+uses the brain, not resurrecting it. `--full-readout` / `use_full_readout=True`
+adds, for every region, its **mean spike rate** plus a fixed random projection of
+the whole 1024‑neuron spike vector, so the policy can weight each region
+(`feature_encoder` in‑dim 88 → 101). It is opt‑in, so existing checkpoints still
+load bit‑for‑bit.
+
+| read‑out | in‑dim | sees |
+|----------|-------:|------|
+| default | 88 | MBON(64) + sensory(24) |
+| `--xsection` | 96 | + cross‑sectional block(8) |
+| `--full-readout` | 101 | MBON + **all 5 regions** + sensory |
+
+
 ## Connectome Mode
+
 The feature extractor can be wired with FlyWire‑derived weights:
 ```python
 from env import FlyTradeEnv
@@ -513,6 +814,11 @@ hold by construction — it can only add value on top of it.
 | P1 | ✅ Benchmark-relative (`excess`) objective so "beat buy & hold" is trained for |
 | P1 | ✅ Deterministic feature encoding + live sensory channel (policy can see the market) |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
+| P0 | ✅ **Multi‑asset portfolio environment + baselines** (`portfolio_env.py`, `run_portfolio.py`) |
+| P0 | ✅ **Fly beats buy & hold out of sample on unseen portfolios** (+26 pp on the original holdout; **+5.6 pp mean, 3/4**, across disjoint never‑trained sets) |
+| P0 | ✅ **Softmax conviction allocation** with an explicit turnover penalty (fixes churn) |
+| P1 | ✅ **Whole‑brain read‑out** (`--full-readout`: all regions feed the policy) |
+| P1 | ✅ **Portfolio trainer** (`train_portfolio.py`) — learn the cross‑section allocation |
 | P1 | Make the connectome block actually contribute (fix AL→KC→MBON cascade / signals) |
 | P1 | Wire real cell‑type anatomy instead of index ranges |
 | P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |

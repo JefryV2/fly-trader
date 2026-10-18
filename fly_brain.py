@@ -31,7 +31,8 @@ import sys
 from pathlib import Path
 from scipy.sparse import csr_matrix
 
-from config import CUR_INDICATOR_SLICE, OBS_DIM, PORTFOLIO_SLICE, REGIME_SLICE
+from config import (CUR_INDICATOR_SLICE, OBS_DIM, PORTFOLIO_SLICE, REGIME_SLICE,
+                    XSECTION_OBS_DIM, XSECTION_SLICE)
 
 # ── FlyWire Connectome Data Loader ──────────────────────────────────────────
 
@@ -558,7 +559,7 @@ class FlyBrainAgent(nn.Module):
     """
     SENSORY_DIM = 24  # dims of the compact observation summary (see sensory_from_obs)
 
-    def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
+    def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None, use_xsection: bool = False, use_full_readout: bool = False, full_readout_proj: int = 8):
         super().__init__()
         self.simulator = MaleCNS1024Simulator(
             use_connectome=use_connectome,
@@ -567,9 +568,30 @@ class FlyBrainAgent(nn.Module):
             N_NEURONS=N_NEURONS
         )
         self.obs_dim = obs_dim
+        # Cross-sectional observations add a *relative-strength* channel to the
+        # sensory summary the read-out consumes. The spiking simulator ignores
+        # the extra tail, so this must be wired into sensory_from_obs or the
+        # features would be silently unused.
+        self.use_xsection = bool(use_xsection)
+        self.sensory_extra = XSECTION_OBS_DIM if self.use_xsection else 0
         self.N_NEURONS = self.simulator.N_NEURONS
 
         self.mbon_dim = self.simulator.IDX_MBON.stop - self.simulator.IDX_MBON.start
+        # ── "Connect all the brain" ────────────────────────────────────────
+        # By default the read-out only sees the mushroom-body output (MBON) plus
+        # the sensory summary, i.e. it ignores Antennal Lobe, Kenyon Cells,
+        # Central Complex and the dopaminergic neurons. With
+        # ``use_full_readout`` we additionally feed the policy (a) the mean
+        # spike rate of *every* region and (b) a fixed random projection of the
+        # whole 1024-neuron spike vector. Both are deterministic functions of
+        # the frozen connectome state, so the read-out can learn to weight each
+        # region instead of relying on MBON alone.
+        self.use_full_readout = bool(use_full_readout)
+        self.REGION_NAMES = ("AL", "KC", "CX", "DAN", "MBON")
+        self.full_readout_proj = int(full_readout_proj) if self.use_full_readout else 0
+        self.full_readout_extra = (
+            len(self.REGION_NAMES) + self.full_readout_proj if self.use_full_readout else 0
+        )
         # The connectome read-out is concatenated with a compact, live sensory
         # vector derived from the observation (see ``sensory_from_obs``). The
         # cached connectome currently emits an all-zero MBON pattern for every
@@ -584,11 +606,19 @@ class FlyBrainAgent(nn.Module):
         # buy & hold — so the head stays small and the stability work lives in
         # the update rule instead (see ``train_online_step``).
         self.feature_encoder = nn.Sequential(
-            nn.Linear(self.mbon_dim + self.SENSORY_DIM, 128),
+            nn.Linear(self.mbon_dim + self.full_readout_extra + self.SENSORY_DIM + self.sensory_extra, 128),
             nn.LayerNorm(128),
             nn.SiLU(),
             nn.Identity(),  # was Dropout(0.1): same index, no keys
         )
+
+        # Fixed (non-trained) projection that lets the read-out see the whole
+        # 1024-neuron spike vector, plus the per-region slices it summarises.
+        if self.use_full_readout:
+            g = torch.Generator().manual_seed(1234)
+            proj = torch.randn(self.N_NEURONS, self.full_readout_proj, generator=g)
+            self.register_buffer("readout_proj", proj / (self.N_NEURONS ** 0.5))
+            self._region_slices = [getattr(self.simulator, f"IDX_{n}") for n in self.REGION_NAMES]
 
         self.actor = nn.Sequential(
             nn.Linear(128, 64),
@@ -682,14 +712,15 @@ class FlyBrainAgent(nn.Module):
         """Deterministic connectome encoding -> (batch, N_NEURONS) spike rates."""
         return self.simulator.encode(obs_np, reward=reward)
 
-    @staticmethod
-    def sensory_from_obs(obs) -> np.ndarray:
-        """Compact, live summary of one observation (a pure function of obs).
+    def sensory_from_obs(self, obs) -> np.ndarray:
+        """Compact, live summary of one observation.
 
         5 multi-horizon returns + realised volatility (2) + range position (1)
         + the 8 current-step indicators + the 4 portfolio-state values + the 4
-        long-horizon regime values = 24 dims. These are already normalised by the
-        environment, so we only apply bounded clipping.
+        long-horizon regime values = 24 dims, plus the optional cross-sectional
+        block (XSECTION_OBS_DIM dims) when the agent was built with
+        ``use_xsection=True``. These are already normalised by the environment,
+        so we only apply bounded clipping.
         """
         o = np.asarray(obs, dtype=np.float64).reshape(-1)
         n = o.size
@@ -721,6 +752,11 @@ class FlyBrainAgent(nn.Module):
             feats.extend(list(np.clip(regime[:4], -3.0, 3.0)))
         else:
             feats.extend([0.0] * 4)
+        if self.use_xsection:
+            x = np.zeros(XSECTION_OBS_DIM, dtype=np.float64)
+            if o.size >= XSECTION_SLICE.stop:
+                x[:] = o[XSECTION_SLICE]
+            feats.extend(list(np.clip(x, -3.0, 3.0)))
         return np.asarray(feats, dtype=np.float32)
 
     def encode_obs(self, obs):
@@ -728,12 +764,55 @@ class FlyBrainAgent(nn.Module):
         obs2 = np.asarray(obs, dtype=np.float32).reshape(1, -1)
         spikes = self.simulator.encode(obs2)[0]
         mbon = spikes[self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]
-        feat = np.concatenate([mbon, self.sensory_from_obs(obs2[0])]).astype(np.float32)
+        parts = [np.asarray(mbon, dtype=np.float32)]
+        if self.use_full_readout:
+            s = np.asarray(spikes, dtype=np.float32).reshape(-1)
+            means = np.array([float(s[r].mean()) for r in self._region_slices],
+                             dtype=np.float32)
+            proj = s @ self.readout_proj.detach().cpu().numpy().astype(np.float32)
+            parts.append(means)
+            parts.append(np.asarray(proj, dtype=np.float32))
+        parts.append(self.sensory_from_obs(obs2[0]))
+        feat = np.concatenate(parts).astype(np.float32)
         return feat, spikes
 
     def encode_feature(self, obs) -> np.ndarray:
         """Deterministic feature vector fed to the read-out: [MBON spikes, sensory]."""
         return self.encode_obs(obs)[0]
+
+    def encode_obs_batch(self, obs_mat) -> np.ndarray:
+        """Batched read-out features for ``(n, obs_dim)`` observations.
+
+        Used by the portfolio env, where a whole cross-section is scored every
+        step: one simulator pass + one read-out pass instead of ``n`` of each.
+        """
+        obs = np.asarray(obs_mat, dtype=np.float32)
+        if obs.ndim == 1:
+            obs = obs[None, :]
+        spikes = np.asarray(self.simulator.encode(obs), dtype=np.float32)
+        parts = [spikes[:, self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]]
+        if self.use_full_readout:
+            means = np.stack([spikes[:, r].mean(axis=1) for r in self._region_slices], axis=1)
+            proj = spikes @ self.readout_proj.detach().cpu().numpy().astype(np.float32)
+            parts.extend([means.astype(np.float32), proj.astype(np.float32)])
+        parts.append(np.stack([self.sensory_from_obs(o) for o in obs]))
+        return np.concatenate(parts, axis=1).astype(np.float32)
+
+    def select_actions_batch(self, obs_mat, deterministic: bool = False):
+        """Score a whole cross-section at once -> (actions, probs, values)."""
+        feats = self.encode_obs_batch(obs_mat)
+        self.eval()
+        with torch.no_grad():
+            logits, values = self.forward_features(torch.from_numpy(feats))
+            probs = F.softmax(logits, dim=-1).cpu().numpy()
+        if self.action_floor > 0.0:
+            probs = np.maximum(probs, self.action_floor)
+            probs = probs / probs.sum(axis=1, keepdims=True)
+        if deterministic:
+            actions = probs.argmax(axis=1)
+        else:
+            actions = np.array([np.random.choice(probs.shape[1], p=p) for p in probs])
+        return actions.astype(int), probs, values.squeeze(-1).cpu().numpy()
 
     def forward_features(self, feat_t: torch.Tensor):
         features = self.feature_encoder(feat_t)

@@ -15,6 +15,7 @@ flywire_weights/*.pkl
 # Model checkpoints / run artifacts
 web-app/checkpoints/*.pt
 *.pt
+*.pt.latest
 *.zip
 *.pkl
 runs/

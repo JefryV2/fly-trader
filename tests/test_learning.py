@@ -107,3 +107,52 @@ def test_reward_normalizer_clips_extremes():
     n = RewardNormalizer()
     out = [n.normalize(x) for x in [1.0] * 50 + [1e6]]
     assert max(abs(v) for v in out) <= 5.0
+
+
+def _obs_batch(n=24):
+    env = FlyTradeEnv(AAPL, window_size=30,
+                      start_date="2022-01-03", end_date="2023-06-30",
+                      indicator_norm="per_feature")
+    obs, _ = env.reset(seed=0)
+    out = []
+    for _ in range(n):
+        out.append(obs)
+        obs, _, done, _, _ = env.step(0)
+        if done:
+            break
+    return np.stack(out)
+
+
+def test_full_readout_connects_all_brain_regions():
+    """The whole-brain read-out must add one mean per region plus a projection of
+    the full spike vector, and every region must actually vary with the input."""
+    base = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
+    full = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True, use_full_readout=True)
+    assert full.full_readout_extra == len(full.REGION_NAMES) + full.full_readout_proj
+    assert (full.feature_encoder[0].in_features
+            == base.feature_encoder[0].in_features + full.full_readout_extra)
+    # Default agent is unchanged (old checkpoints still load bit-for-bit).
+    assert base.feature_encoder[0].in_features == 88
+
+    feats = np.stack([full.encode_feature(o) for o in _obs_batch(24)])
+    assert feats.shape[1] == full.feature_encoder[0].in_features
+    mbon = slice(0, 64)
+    means = slice(64, 64 + len(full.REGION_NAMES))
+    proj = slice(means.stop, means.stop + full.full_readout_proj)
+    assert feats[:, mbon].std(axis=0).mean() > 0.0     # MBON still live
+    assert feats[:, means].std(axis=0).min() > 0.0     # every region varies
+    assert feats[:, proj].std(axis=0).mean() > 0.0     # projection varies
+
+
+def test_batched_features_match_single_observation():
+    """The portfolio env scores a whole cross-section per step; the batched path
+    must produce exactly the same features as the one-at-a-time path."""
+    agent = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True, use_full_readout=True)
+    obs = _obs_batch(8)
+    batched = agent.encode_obs_batch(obs)
+    single = np.stack([agent.encode_feature(o) for o in obs])
+    assert np.allclose(batched, single, atol=1e-5)
+    actions, probs, values = agent.select_actions_batch(obs, deterministic=True)
+    assert actions.shape == (obs.shape[0],)
+    assert probs.shape == (obs.shape[0], 7)
+    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)

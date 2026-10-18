@@ -36,7 +36,7 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "per_feature", reward_mode: str = "shaped", dd_penalty: float = 0.0):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "per_feature", reward_mode: str = "shaped", dd_penalty: float = 0.0, use_xsection: bool = False):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
@@ -47,6 +47,17 @@ class FlyTradeEnv(gym.Env):
         # slicing, otherwise a 200-day trend is undefined for the first ~10
         # months of a test slice.
         regime_full = self._compute_regime_block(self.data)
+        # Cross-sectional block: also computed on the FULL history then sliced,
+        # so universe-relative ranks are defined from the first bar of a test
+        # window. Loaded from the precomputed panel (build_xsection.py).
+        self.use_xsection = bool(use_xsection)
+        xsec_full = None
+        if self.use_xsection:
+            from config import DATA_DIR
+            from xsection import default_panel_path, features_for_ticker, load_panel
+            ticker = Path(data_path).stem.replace("_daily", "")
+            panel = load_panel(default_panel_path(DATA_DIR))
+            xsec_full = features_for_ticker(panel, ticker, self.data.index)
         # Optional inclusive date slicing, used for train/validation/test splits.
         keep = np.ones(len(self.data), dtype=bool)
         if start_date is not None:
@@ -54,6 +65,7 @@ class FlyTradeEnv(gym.Env):
         if end_date is not None:
             keep &= np.asarray(self.data.index <= pd.to_datetime(end_date))
         self.regime = regime_full[keep]
+        self.xsec = xsec_full[keep] if xsec_full is not None else None
         self.data = self.data[keep].copy()
         assert len(self.data) > window_size + 1, (
             f"Not enough rows ({len(self.data)}) after date slicing "
@@ -67,7 +79,9 @@ class FlyTradeEnv(gym.Env):
         n_ind = window_size * 8  # RSI, MACD, BB width, ATR, trend strength, vol regime, SMA ratio, EMA trend
         n_port = 4  # exposure, cash fraction, unrealised PnL, steps-since-trade
         n_regime = 4  # dist SMA200, dist SMA50, ann. vol20, vol20/vol60
-        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind + n_port + n_regime,), dtype=np.float32)
+        n_xsec = int(self.xsec.shape[1]) if self.xsec is not None else 0
+        self.n_xsec = n_xsec
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(n_ohlcv + n_ind + n_xsec + n_port + n_regime,), dtype=np.float32)
         # 7 actions: Hold, Buy 25%, Buy 50%, Buy 100%, Sell 25%, Sell 50%, Sell 100%
         self.action_space = gym.spaces.Discrete(7)
         self.transaction_cost = transaction_cost
@@ -234,7 +248,13 @@ class FlyTradeEnv(gym.Env):
         self.ind_mean = self.indicators.mean(axis=0).astype(np.float64)
         self.ind_std = self.indicators.std(axis=0).astype(np.float64)
 
-    def _get_observation(self, idx: int) -> np.ndarray:
+    def _market_observation(self, idx: int) -> np.ndarray:
+        """[OHLCV window, indicator window, cross-sectional block] for bar ``idx``.
+
+        This is the *asset-local* part of the observation: everything that
+        depends only on this ticker's own history. The portfolio env reuses it
+        and supplies its own portfolio block.
+        """
         window = self.data.iloc[idx : idx + self.window_size][["Open", "High", "Low", "Close", "Volume"]]
         norm = window["Close"].iloc[0]
         ohlcv = (window / norm).values.flatten().astype(np.float32)
@@ -252,6 +272,23 @@ class FlyTradeEnv(gym.Env):
             ind_std = np.std(ind)
             if ind_std > 1e-6:
                 ind = (ind - ind_mean) / ind_std
+        ridx = min(idx + self.window_size - 1, len(self.regime) - 1)
+        # Cross-sectional context for the *current* bar (empty block when off).
+        if self.xsec is not None and ridx >= 0 and len(self.xsec):
+            xsec = self.xsec[ridx]
+        else:
+            xsec = np.zeros(self.n_xsec, dtype=np.float32)
+        return np.concatenate([ohlcv, ind, np.asarray(xsec, dtype=np.float32)])
+
+    def _regime_observation(self, idx: int) -> np.ndarray:
+        """Long-horizon regime context for bar ``idx`` (final 4 obs values)."""
+        ridx = min(idx + self.window_size - 1, len(self.regime) - 1)
+        return (self.regime[ridx] if ridx >= 0 and len(self.regime)
+                else np.zeros(4, dtype=np.float32))
+
+    def _get_observation(self, idx: int) -> np.ndarray:
+        # Asset-local features (OHLCV + indicators + optional cross-section).
+        market = self._market_observation(idx)
         # Portfolio-state block: lets the policy condition on its own position.
         price_idx = min(idx + self.window_size - 1, len(self.data) - 1)
         price = float(self.data.iloc[price_idx]["Close"])
@@ -265,10 +302,8 @@ class FlyTradeEnv(gym.Env):
             unreal = 0.0
         recency = float(np.clip((self.current_step - self.last_trade_step) / 30.0, 0.0, 1.0))
         port = np.array([exposure, cash_frac, unreal, recency], dtype=np.float32)
-        # Long-horizon regime context for the *current* bar.
-        ridx = min(idx + self.window_size - 1, len(self.regime) - 1)
-        regime = self.regime[ridx] if ridx >= 0 and len(self.regime) else np.zeros(4, dtype=np.float32)
-        return np.concatenate([ohlcv, ind, port, np.asarray(regime, dtype=np.float32)])
+        regime = self._regime_observation(idx)
+        return np.concatenate([market, port, np.asarray(regime, dtype=np.float32)])
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)

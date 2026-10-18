@@ -45,12 +45,24 @@ PORTFOLIO_OBS_DIM = 4
 # trend is defined from the first bar of a test window.
 #   [close/SMA200-1, close/SMA50-1, ann.vol20, vol20/vol60]
 REGIME_OBS_DIM = 4
+# Cross-sectional (universe-relative) block. OPTIONAL and inserted *between* the
+# market block and the portfolio/regime tail (see layout note below).
+XSECTION_OBS_DIM = 8
+# Base (no cross-section) observation the shipped checkpoints were trained on.
 OBS_DIM = MARKET_OBS_DIM + PORTFOLIO_OBS_DIM + REGIME_OBS_DIM  # 398
-# Explicit slices into the observation tail. The spiking encoder and the sensory
-# summary must use these rather than [-8:], because the blocks now occupy the tail.
+# Observation dim when use_xsection=True.
+OBS_DIM_XSECTION = OBS_DIM + XSECTION_OBS_DIM  # 406
+# Observation layout (fixed order):
+#   [ market 390 ][ xsection k (optional) ][ portfolio 4 ][ regime 4 ]
+# Portfolio and regime are always the FINAL 8 values, so they are indexed
+# tail-relative. That keeps strategy.py's overlays (obs[-8] exposure, obs[-4]
+# trend200, obs[-1] vol ratio) and fly_brain.sensory_from_obs correct in *both*
+# layouts without a layout flag.
 CUR_INDICATOR_SLICE = slice(MARKET_OBS_DIM - 8, MARKET_OBS_DIM)
-PORTFOLIO_SLICE = slice(MARKET_OBS_DIM, MARKET_OBS_DIM + PORTFOLIO_OBS_DIM)
-REGIME_SLICE = slice(MARKET_OBS_DIM + PORTFOLIO_OBS_DIM, OBS_DIM)
+# Only meaningful when the xsection block is present (use_xsection=True).
+XSECTION_SLICE = slice(MARKET_OBS_DIM, MARKET_OBS_DIM + XSECTION_OBS_DIM)
+PORTFOLIO_SLICE = slice(-(PORTFOLIO_OBS_DIM + REGIME_OBS_DIM), -REGIME_OBS_DIM)
+REGIME_SLICE = slice(-REGIME_OBS_DIM, None)
 
 # ── Anatomical partitions as fractions of N_NEURONS ────────────────────────
 # AL / KC / CX / DAN / MBON  (128 / 640 / 128 / 64 / 64 out of 1024)
