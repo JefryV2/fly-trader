@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=8" />
 </head>
 <body>
 
@@ -309,6 +309,7 @@
         <button class="tab-btn active" data-tab="neural">🧠 Neural</button>
         <button class="tab-btn" data-tab="stats">📊 Stats</button>
         <button class="tab-btn" data-tab="sims">🧪 Simulations <span class="tab-badge" id="sim-tab-badge">0</span></button>
+        <button class="tab-btn" data-tab="portfolio">📈 Portfolio</button>
         <button class="tab-btn" data-tab="control">⚙️ Info</button>
       </div>
 
@@ -482,6 +483,38 @@
 
       </div>
 
+      <!-- ─ PORTFOLIO (CROSS-SECTION) TAB ─ -->
+      <div class="tab-panel" id="tab-portfolio">
+
+        <div class="card">
+          <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Cross-Section Backtest</span>
+            <button class="btn-clear-sims" id="portfolio-run-btn" title="Re-run the held-out backtest">Re-run</button>
+          </div>
+          <div class="card-sub" id="portfolio-config">loading…</div>
+          <div class="sim-kpi-grid" style="margin-top:.5rem">
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Fly</span><span class="sim-kpi-val" id="pf-fly">–</span></div>
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Buy &amp; Hold</span><span class="sim-kpi-val" id="pf-bh">–</span></div>
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Excess</span><span class="sim-kpi-val" id="pf-exc">–</span></div>
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Sharpe</span><span class="sim-kpi-val" id="pf-sharpe">–</span></div>
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Max Drawdown</span><span class="sim-kpi-val" id="pf-dd">–</span></div>
+            <div class="sim-kpi-box"><span class="sim-kpi-label">Names Held</span><span class="sim-kpi-val" id="pf-pos">–</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Equity — fly vs baselines</div>
+          <canvas id="portfolio-equity-chart" height="170"></canvas>
+          <div class="lab-chart-legend" id="portfolio-legend" style="margin-top:.35rem"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Strategies</div>
+          <div class="pf-table" id="portfolio-table"></div>
+        </div>
+
+      </div>
+
       <!-- ─ INFO TAB ─ -->
       <div class="tab-panel" id="tab-control">
 
@@ -635,6 +668,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=7"></script>
+  <script src="/static/script.js?v=8"></script>
 </body>
 </html>

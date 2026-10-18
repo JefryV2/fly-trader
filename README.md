@@ -28,20 +28,29 @@ The pipeline:
 - Environment: 398‑dim observation (`30 × 5` OHLCV + `30 × 8` indicators + 4
   portfolio‑state + 4 long‑horizon regime features), transaction costs, optional
   stop‑loss/take‑profit. Covered by `tests/`.
-- Data: daily OHLCV for AAPL / TSLA / NVDA / MSFT. **The files do not share a
-  date range**: AAPL is 2022-01-03 → 2024-12-31 (~753 rows) while
-  TSLA/NVDA/MSFT are 2015-01-02 → 2025-12-30 (~2,765 rows).
+- Data: daily OHLCV for **54 US tickers** in `data/`. The four original
+  single‑asset files did **not** share a date range (AAPL is 2022-01-03 →
+  2024-12-31 (~753 rows) while TSLA/NVDA/MSFT are 2015-01-02 → 2025-12-30
+  (~2,765 rows)); the 52 tickers added for portfolio work all share one
+  identical 2,765‑row calendar, which is what lets the portfolio env align a
+  cross‑section (`PortfolioEnv` refuses a universe whose calendars differ).
 - `train.py`: offline online‑AC trainer with a proper time split and
   validation‑based checkpoint selection. Runs end‑to‑end.
 - `scripts/backtest.py`: honest out‑of‑sample evaluation vs buy‑&‑hold,
   momentum and random baselines, all sharing one masking/selection code path.
 - `web-app/server.py`: FastAPI backend + Three.js front‑end demo. Boots, steps,
-  trains and evaluates.
+  trains and evaluates. Its **Portfolio** tab serves the cross‑section backtest
+  (`/portfolio_eval`) with baselines and equity curves.
 - `/train_batch` trains on the **train split only** and reports **median +
   held‑out (test)** results; `/eval_episode` is split‑aware and returns a
   buy‑&‑hold reference.
 - One shared masking implementation (`strategy.apply_action_mask`) used by the
   API, the trainer and the backtest (previously four copy‑pasted variants).
+- Portfolio mode: a shared policy allocates one budget across N assets + cash on
+  a monthly horizon, with an optional **breadth gate** (`topk`, or `positive` =
+  the held breadth k is a policy output). Validated on ticker‑holdout universes
+  and written up with negatives in *Adaptive breadth* below; the dashboard's
+  Portfolio tab serves the real backtest.
 
 **Known limitations / caveats**
 - **Inconsistent data ranges.** Training/evaluating on the full file reports
@@ -82,9 +91,9 @@ fly-trader/
 │   strategy.py                # Shared masking, action selection, baselines, metrics, roll‑out
 │   trainer.py                 # Reusable online training episode
 │   train.py                   # Offline trainer: train → validate → test vs baselines
-│   portfolio_env.py           # Multi-asset long-only portfolio environment (softmax allocation)
-│   train_portfolio.py         # Multi-asset trainer: learn the cross-section allocation
-│   run_portfolio.py           # Portfolio baselines (buy&hold / trend200 / momentum) + fly
+│   portfolio_env.py           # Multi-asset long-only portfolio environment (softmax allocation + breadth gate)
+│   train_portfolio.py         # Multi-asset trainer: distill the rule, learn the cross-section allocation
+│   run_portfolio.py           # Portfolio baselines (buy&hold / trend200 / momentum) + fly (any gate)
 │   xsection.py                # Cross-sectional (universe-relative) features
 │   build_xsection.py          # Build data/xsection_panel.npz
 │   data_fetch.py              # Historical data downloader
@@ -127,6 +136,13 @@ python -m pip install -r requirements.txt
    ```bash
    python -m uvicorn web-app.server:app --port 8000
    ```
+   The dashboard's **Portfolio** tab runs the held‑out cross‑section backtest
+   (`GET /portfolio_eval`): the fly versus buy & hold, trend 200d and momentum
+   rotation on the unseen ticker universe, with equity curves. It serves
+   `web-app/checkpoints/portfolio_fly.pt`; the recipe that produces it is in
+   *Adaptive breadth* below. Portfolio mode is configured by environment
+   variables (`FLYBRAIN_PORTFOLIO_CKPT`, `…_PLAN`, `…_SPLIT`, `…_TICKERS`,
+   `…_GATE`, `…_MIN_K`, `…_MAX_K`).
 
 ## How evaluation works (and why it changed)
 Previously the model was trained and evaluated on the **same** data, so headline
@@ -872,6 +888,97 @@ The fly captures roughly a third of the simple momentum rule's excess
 buy & hold; `trend200` remains the better pure risk‑adjusted rule
 (Sharpe 1.37, maxDD 17.4 %).
 
+### Adaptive breadth: letting the fly choose *how many* names to hold
+
+The top‑k gate above fixes the book size by hand, and that is a real weakness:
+the fixed k is the one thing about the allocation that the policy cannot see.
+`alloc_gate="positive"` removes it — **the breadth k becomes a policy output**.
+Only the assets the policy itself flags with a *positive conviction* (one of the
+three buy actions) compete for the budget, plus the cash slot, so the fly can
+widen and narrow its own book decision by decision, and an all‑negative book is
+a learned 100 % cash de‑risk. `alloc_min_k` / `alloc_max_k` bound it
+(`k = clamp(#positive, min_k, max_k)`), which is what keeps it from
+over‑reacting, as the measurements below show.
+
+All numbers are the honest ticker‑holdout backtest (10 bps/side, monthly
+rebalance, greedy, unseen tickers), averaged over **3 seeds**; `(n/3)` is how many
+seeds were positive on that setting. `meanCMN` averages each seed's mean over the
+five settings every configuration has in common.
+
+| configuration | S1 | S2 | S3 | S4 | H20 | 2022 bear (S1) | 2022 bear (H20) | meanCMN | sd | names held |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **fixed top‑3** (`--alloc-topk 3`) | +271.6 (3/3) | +4.5 (2/3) | +38.4 (3/3) | +27.4 (2/3) | +340.2 (3/3) | +41.9 (3/3) | +37.3 (3/3) | **+143.7** | 36.2 | 3.0 always |
+| adaptive, unbounded (`--alloc-gate positive`) | +267.0 (3/3) | −18.0 (1/3) | −26.8 (1/3) | +9.5 (1/3) | +333.7 (3/3) | +44.1 (3/3) | +40.2 (3/3) | +138.9 | 36.9 | 0.9 – 2.2 |
+| adaptive, floor 3 (`--alloc-min-k 3`) | +266.4 (3/3) | +4.5 (2/3) | +35.8 (3/3) | +27.4 (2/3) | +317.7 (3/3) | +41.9 (3/3) | +37.4 (3/3) | +138.1 | 44.6 | 3.0 – 3.2 |
+| **adaptive, [2, 4]** (`--alloc-min-k 2 --alloc-max-k 4`) | +259.4 (3/3) | −12.2 (1/3) | +21.8 (3/3) | **+65.5 (3/3)** | +314.8 (3/3) | +42.8 (3/3) | +38.1 (3/3) | **+144.1** | 37.8 | 2.0 – 2.5 |
+| [2, 4] but trained on **32** tickers | +249.7 (3/3) | in‑sample | in‑sample | +55.5 (3/3) | +150.8 (3/3) | +21.8 (3/3) | +13.6 (3/3) | +98.3 | **9.8** | 2.0 – 2.5 |
+
+Three honest conclusions.
+
+**1. Breadth is genuinely a policy output, and it adapts.** The unbounded gate
+holds 0.9 names on S2 and 2.2 on H20 — the same weights, a different book size
+for every universe — while the fixed gate holds 3.0 by construction. There is
+also a real regime signal in it: the unbounded gate *widens* the floor of its
+own risk in the 2022 bear (+44.1 / +40.2 pp, the best bear numbers in the table).
+
+**2. …but the policy's conviction scale does not transfer, and that is why the
+floor matters.** The unbounded gate's *absolute* threshold under‑fires on an
+unseen cross‑section: it drops to 1/3 positive on S2/S3/S4 and gives back
+most of the edge there. This is the same structural limitation as before —
+asset‑local features can express "my momentum is above a level", not "I am in the
+top‑k" — so `[2, 4]` keeps the policy's choice *inside* a sane range. With the
+floor, the adaptive gate is a **statistical tie on returns** with the fixed gate
+(+144.1 vs +143.7, sd ≈ 37, n = 3) and a **clear win on the ambiguous‑breadth
+universe**: S4 +65.5 pp with 3/3 seeds positive, versus +27.4 pp with only 2/3
+for fixed‑3. `--alloc-min-k 3` ("top‑3, or wider when the policy is more
+positive") reproduces fixed‑3 almost exactly, which is the sanity check that the
+gate is faithful when it should be.
+
+**3. The wider training universe is a *consistency* win, not a return win —
+report it as a negative for returns.** Training on 32 tickers instead of 12 and
+testing on the 20 that remain unseen in both cases cuts the mean by ~46 pp
+(+98.3 vs +144.1) and, more importantly, **halves the crisis protection**
+(2022 bear +13.6 vs +38.1 pp on H20). What it buys is by far the most stable
+result in the table (sd 9.8 vs 37.8) and 3/3 positive on every setting. More
+diversity makes the policy more average; it does not make it better.
+
+Reproduce the shipped adaptive policy (`--episodes 0` = distillation only; seed 0,
+which is the run the dashboard serves):
+
+```bash
+python train_portfolio.py \
+    --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
+    --plan cycle --episodes 0 --rebalance-every 21 --full-readout \
+    --alloc-gate positive --alloc-min-k 2 --alloc-max-k 4 \
+    --imitate-episodes 10 --out web-app/checkpoints/portfolio_fly.pt
+
+python run_portfolio.py --plan cycle --split test --rebalance-every 21 \
+    --full-readout --alloc-gate positive --alloc-min-k 2 --alloc-max-k 4 \
+    --ckpt web-app/checkpoints/portfolio_fly.pt
+```
+
+⇒ `fly=327.31%  bh=84.77%  excess=+242.54pp  sharpe=1.58  maxDD=18.89% (bh 24.90%)
+avg_positions=2.10`. The gate flags used to train a checkpoint must be passed
+again to `run_portfolio.py` or the allocation will not match.
+
+**Seed sensitivity, stated plainly.** The single‑number headline is fragile: on
+S1 the fixed‑3 gate scores +237 / +427 / +150 pp across seeds 0/1/2, and `[2, 4]`
+scores +243 / +418 / +117. Seed 0 reproduces the +237.4 pp headline above
+exactly, which is why the recipe is worth quoting — but a claim that rests on one
+seed is worth about the spread between them, and that is why every table here
+quotes 3 seeds and a count of positive settings rather than a single best run.
+
+### The dashboard runs the portfolio fly
+
+The web app's **Portfolio** tab (`GET /portfolio_eval`) runs exactly the backtest
+above — not a simulation of it: same env, same checkpoint, same 10 bps — and shows
+the fly against buy & hold, trend 200 d and momentum top‑3 rotation on the unseen
+universe, with log‑scaled equity curves and a strategy table. It reads
+`web-app/checkpoints/portfolio_fly.pt` and can be pointed elsewhere with
+`FLYBRAIN_PORTFOLIO_CKPT` (plus `…_PLAN`, `…_SPLIT`, `…_TICKERS`, `…_GATE`,
+`…_MIN_K`, `…_MAX_K`). If the checkpoint is missing the tab explains how to build
+it instead of failing.
+
 ### Why the fly churned: the reward *horizon*, not the features
 
 Three daily‑rebalanced arms were trained to 400 episodes on the 12‑asset
@@ -1048,6 +1155,10 @@ hold by construction — it can only add value on top of it.
 | P0 | ✅ **Softmax conviction allocation** with an explicit turnover penalty (fixes churn) |
 | P1 | ✅ **Whole‑brain read‑out** (`--full-readout`: all regions feed the policy) |
 | P1 | ✅ **Portfolio trainer** (`train_portfolio.py`) — learn the cross‑section allocation |
+| P1 | ✅ **Adaptive breadth** (`--alloc-gate positive` ± `--alloc-min-k`/`--alloc-max-k`): the held breadth k is a policy output; ties fixed‑3 on mean return and wins on the ambiguous‑breadth holdout |
+| P1 | ✅ **Portfolio tab in the dashboard** (`GET /portfolio_eval`) — the real holdout backtest with the three baselines and equity curves |
+| P1 | Wire the adaptive breadth into RL so k is *learned*, not just selected by the policy's argmax (needs a pooled cross‑sectional representation — asset‑local features cannot decide breadth) |
+| P1 | Recover the wider‑universe bear protection (32‑ticker training currently halves 2022 downside protection) |
 | P1 | Make the connectome block actually contribute (fix AL→KC→MBON cascade / signals) |
 | P1 | Wire real cell‑type anatomy instead of index ranges |
 | P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |

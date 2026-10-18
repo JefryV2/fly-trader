@@ -92,6 +92,102 @@ def test_topk_gate_keeps_the_full_topk_invested():
     assert w.sum() < 1.0
 
 
+def test_positive_gate_keeps_only_positive_conviction_assets():
+    # "k is a policy output": exactly the assets the policy flags with a positive
+    # conviction compete for the budget. Hold (desire 0) and the sell side are
+    # excluded, so the policy controls breadth directly.
+    env = make(alloc_gate="positive")
+    w = env.weights_from_actions([3, 0, 6])          # +1, 0, -1
+    assert w[0] > 0.0
+    assert w[1] == 0.0 and w[2] == 0.0
+    assert w.sum() <= 1.0 + 1e-9
+    # Cash keeps its own slice of the softmax.
+    assert np.isclose(w.sum(), np.exp(2.0) / (1.0 + np.exp(2.0)), atol=1e-6)
+
+
+def test_positive_gate_all_negative_is_a_full_cash_de_risk():
+    env = make(alloc_gate="positive")
+    env.reset()
+    _, _, _, info = env.step([6, 6, 4])              # no positive conviction
+    assert np.allclose(info["weights"], 0.0)
+    assert np.isclose(info["cash"], 1.0)
+
+
+def test_positive_gate_breadth_is_the_number_of_positive_actions():
+    env = make(alloc_gate="positive")
+    assert np.count_nonzero(env.weights_from_actions([3, 3, 6])) == 2
+    assert np.count_nonzero(env.weights_from_actions([3, 2, 1])) == 3
+    assert np.count_nonzero(env.weights_from_actions([0, 0, 0])) == 0
+    # Same conviction -> equal weights, so the gate can express equal-weight
+    # breadth exactly.
+    w = env.weights_from_actions([3, 3, 3])
+    assert np.allclose(w, w[0])
+
+
+def test_positive_gate_matches_topk_when_labels_are_pm_one():
+    # A fully decisive policy (winners Buy100, losers Sell100) holds exactly the
+    # winners, so the policy-controlled gate coincides with the fixed top-k gate
+    # there -- the distilled policy is a safe starting point for the adaptive one.
+    labels = [3, 6, 3]
+    pos = make(alloc_gate="positive").weights_from_actions(labels)
+    fixed = make(alloc_topk=2).weights_from_actions(labels)
+    assert np.allclose(pos, fixed)
+
+
+def test_gate_disables_the_directional_action_mask():
+    # The buy/sell mask is wrong for conviction actions, so any breadth gate
+    # turns it off automatically.
+    assert make().action_mask is True
+    assert make(alloc_topk=2).action_mask is False
+    assert make(alloc_gate="positive").action_mask is False
+
+
+def test_alloc_gate_topk_requires_a_k():
+    with pytest.raises(ValueError):
+        make(alloc_gate="topk")
+    with pytest.raises(ValueError):
+        make(alloc_gate="nonsense")
+    with pytest.raises(ValueError):
+        make(alloc_gate="positive", alloc_min_k=3, alloc_max_k=2)
+
+
+def test_breadth_floor_keeps_the_book_invested():
+    # The learned threshold can flag too few names on an unseen cross-section;
+    # the floor keeps the highest-conviction ones in the book regardless of sign.
+    env = make(alloc_gate="positive", alloc_min_k=2)
+    w = env.weights_from_actions([6, 4, 6])          # nothing is positive
+    assert np.count_nonzero(w) == 2                  # the two top convictions
+    assert w[2] == 0.0
+    # ... and it never widens past the policy's own breadth when that is >= k.
+    w2 = env.weights_from_actions([3, 2, 1])
+    assert np.count_nonzero(w2) == 3
+
+
+def test_breadth_cap_bounds_breadth_but_leaves_it_adaptive():
+    env = make(alloc_gate="positive", alloc_max_k=2)
+    assert np.count_nonzero(env.weights_from_actions([3, 3, 3])) == 2   # capped
+    assert np.count_nonzero(env.weights_from_actions([3, 6, 6])) == 1   # adaptive
+    assert np.count_nonzero(env.weights_from_actions([6, 6, 6])) == 0   # cash
+
+
+def test_min_k_gate_is_at_least_the_fixed_topk():
+    # "top-3, or wider if the policy is more positive": with min_k=3 and
+    # positive convictions on two names it must still hold three.
+    env = make(alloc_gate="positive", alloc_min_k=3)   # n=3 -> everything
+    assert np.count_nonzero(env.weights_from_actions([3, 3, 6])) == 3
+
+
+def test_metrics_report_average_breadth():
+    env = make(alloc_gate="positive")
+    env.reset()
+    done = False
+    while not done:
+        _, _, done, _ = env.step([3, 3, 6])          # always two names
+    m = env.metrics()
+    assert np.isclose(m["avg_positions"], 2.0)
+    assert m["min_positions"] == 2 and m["max_positions"] == 2
+
+
 def test_decomposed_rewards_sum_to_net_portfolio_return():
     env = make(turnover_penalty=0.0)
     env.reset()

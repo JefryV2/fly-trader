@@ -83,6 +83,7 @@ function initTabs() {
       // Redraw canvases that may have been hidden
       if (tab === 'stats') { drawRewardChartBig(); fetchLearningHistory(); fetchSimulationHistory(); }
       if (tab === 'sims')  { fetchSimulationHistory(); }
+      if (tab === 'portfolio') { fetchPortfolioEval(); }
     });
   });
 }
@@ -1687,6 +1688,180 @@ function setStatus(state, text) {
 }
 
 /* ─────────────────────────────────────────────
+    Portfolio (cross-section) tab
+    One shared policy allocates the whole book across N assets + cash on a
+    monthly rebalance; the numbers are the honest ticker-holdout backtest.
+ ───────────────────────────────────────────── */
+let portfolioData = null;
+
+const PF_COLORS = {
+  fly:             '#00e5ff',
+  'buy&hold':      '#22c55e',
+  trend200:        '#ffb703',
+  'mom120-top3-m': '#8c52ff',
+};
+const PF_LABELS = {
+  fly:             'Fly (portfolio)',
+  'buy&hold':      'Buy & Hold',
+  trend200:        'Trend 200d',
+  'mom120-top3-m': 'Momentum 120d top-3',
+};
+const PF_ORDER = ['buy&hold', 'trend200', 'mom120-top3-m', 'fly'];
+
+async function fetchPortfolioEval(refresh = false) {
+  const cfg = $('portfolio-config');
+  if (cfg) cfg.textContent = 'running held-out backtest…';
+  try {
+    const r = await fetch(`${API}/portfolio_eval${refresh ? '?refresh=true' : ''}`);
+    const d = await r.json();
+    portfolioData = d;          // the chart reads this module-level state
+    renderPortfolio(d);
+  } catch (e) {
+    console.warn('Portfolio eval failed:', e);
+    renderPortfolio({ available: false, error: String(e) });
+  }
+}
+
+function _pfKpi(id, text, cls) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'sim-kpi-val' + (cls ? ' ' + cls : '');
+}
+
+function _pfPct(v) { return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`; }
+
+function renderPortfolio(d) {
+  const table = $('portfolio-table');
+  const cfg   = $('portfolio-config');
+
+  if (!d || d.available === false) {
+    ['pf-fly', 'pf-bh', 'pf-exc', 'pf-sharpe', 'pf-dd', 'pf-pos']
+      .forEach(id => _pfKpi(id, '–'));
+    const c = $('portfolio-equity-chart');
+    if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    const leg = $('portfolio-legend'); if (leg) leg.innerHTML = '';
+    if (cfg) cfg.textContent = (d && d.checkpoint)
+      ? `no checkpoint at checkpoints/${d.checkpoint}`
+      : 'portfolio backtest unavailable';
+    if (table) {
+      const recipe = (d && d.recipe)
+        ? `<div class="pf-recipe">train it first:<br>${d.recipe}</div>` : '';
+      const err = (d && d.error) ? `<div class="pf-error">${d.error}</div>` : '';
+      table.innerHTML = err + recipe;
+    }
+    return;
+  }
+
+  const s  = d.strategies;
+  const fl = s.fly, bh = s['buy&hold'];
+
+  if (cfg) {
+    cfg.textContent =
+      `${d.n_assets} unseen tickers · ${d.plan}/${d.split} ${d.date_range[0]}→${d.date_range[1]}` +
+      ` · monthly rebalance · gate ${d.gate.mode}` +
+      (d.gate.mode === 'positive' ? ` [${d.gate.min_k},${d.gate.max_k}]` : '') +
+      ` · ${d.cost_bps} bps/side · ${d.full_readout ? 'whole-brain read-out' : 'MBON read-out'}`;
+  }
+
+  const exc = d.fly_excess_vs_buyhold_pp;
+  _pfKpi('pf-fly', _pfPct(fl.return_pct), fl.return_pct >= 0 ? 'pos' : 'neg');
+  _pfKpi('pf-bh', _pfPct(bh.return_pct), bh.return_pct >= 0 ? 'pos' : 'neg');
+  _pfKpi('pf-exc', _pfPct(exc), exc >= 0 ? 'pos' : 'neg');
+  _pfKpi('pf-sharpe', fl.sharpe.toFixed(2));
+  _pfKpi('pf-dd', `${fl.max_drawdown_pct.toFixed(1)}%`);
+  _pfKpi('pf-pos', fl.avg_positions.toFixed(1));
+
+  if (table) {
+    const live = PF_ORDER.filter(n => s[n]);
+    const best = Math.max(...live.map(n => s[n].return_pct));
+    const head = `<div class="pf-row head"><span>Strategy</span>` +
+      `<span class="pf-num">Return</span><span class="pf-num">Max DD</span>` +
+      `<span class="pf-num">Sharpe</span><span class="pf-num">Names</span></div>`;
+    const rows = live.map(n => {
+      const v = s[n];
+      const cls = (n === 'fly' ? ' pf-fly-row' : '') +
+                  (v.return_pct === best ? ' pf-best-row' : '');
+      return `<div class="pf-row${cls}">` +
+        `<span class="pf-name">${PF_LABELS[n] || n}</span>` +
+        `<span class="pf-num ${v.return_pct >= 0 ? 'pf-pos' : 'pf-neg'}">${_pfPct(v.return_pct)}</span>` +
+        `<span class="pf-num">${v.max_drawdown_pct.toFixed(1)}%</span>` +
+        `<span class="pf-num">${v.sharpe.toFixed(2)}</span>` +
+        `<span class="pf-num">${v.avg_positions.toFixed(1)}</span></div>`;
+    }).join('');
+    table.innerHTML = head + rows;
+  }
+
+  drawPortfolioEquityChart();
+}
+
+function drawPortfolioEquityChart() {
+  const canvas = $('portfolio-equity-chart');
+  if (!canvas || !portfolioData || !portfolioData.available) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth || 280;
+  const H = canvas.clientHeight || 170;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const s = portfolioData.strategies;
+  const names = PF_ORDER.filter(n => s[n] && s[n].curve && s[n].curve.length > 1);
+  if (!names.length) return;
+  // Log scale: the fly's held-out curve spans orders of magnitude, so a linear
+  // axis would flatten every other strategy onto one line.
+  const curves = names.map(n => s[n].curve.map(v => Math.log10(Math.max(v, 1e-3))));
+  const n = Math.max(...curves.map(c => c.length));
+  const flat = curves.reduce((a, c) => a.concat(c), []);
+  const ymin = Math.min(...flat), ymax = Math.max(...flat);
+
+  const padL = 36, padR = 8, padT = 10, padB = 16;
+  const cW = W - padL - padR, cH = H - padT - padB;
+  const gx = i => padL + (i / (n - 1)) * cW;
+  const gy = v => padT + cH - ((v - ymin) / ((ymax - ymin) || 1)) * cH;
+
+  ctx.font = '9px JetBrains Mono, monospace';
+  ctx.fillStyle = '#4e5e7a';
+  ctx.textAlign = 'right';
+  for (let t = 0; t <= 4; t++) {
+    const v = ymin + (ymax - ymin) * t / 4;
+    const y = gy(v);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText(_pfPct((Math.pow(10, v) - 1) * 100), padL - 5, y + 3);
+  }
+
+  const dates = portfolioData.curve_dates || [];
+  if (dates.length) {
+    ctx.textAlign = 'left';
+    ctx.fillText(dates[0].slice(0, 7), padL, H - 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(dates[dates.length - 1].slice(0, 7), W - padR, H - 4);
+  }
+
+  names.forEach((name, k) => {
+    const c = curves[k];
+    ctx.beginPath();
+    c.forEach((v, i) => { const x = gx(i), y = gy(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.strokeStyle = PF_COLORS[name] || '#888';
+    ctx.lineWidth = name === 'fly' ? 2.0 : 1.1;
+    ctx.globalAlpha = name === 'fly' ? 1 : 0.75;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+
+  const leg = $('portfolio-legend');
+  if (leg) {
+    leg.innerHTML = names.map(nm =>
+      `<span class="portfolio-legend-item"><span class="portfolio-legend-swatch" ` +
+      `style="background:${PF_COLORS[nm]}"></span>${PF_LABELS[nm] || nm}</span>`
+    ).join('');
+  }
+}
+
+/* ─────────────────────────────────────────────
     Learning History Fetch & Charts
  ───────────────────────────────────────────── */
 async function fetchLearningHistory() {
@@ -2045,6 +2220,8 @@ $('reset-btn').addEventListener('click', () => {
 $('auto-btn').addEventListener('click', () => {
   autoPilot ? stopAuto() : startAuto();
 });
+
+$('portfolio-run-btn')?.addEventListener('click', () => fetchPortfolioEval(true));
 
 $('train-batch-btn').addEventListener('click', () => {
   stopAuto();

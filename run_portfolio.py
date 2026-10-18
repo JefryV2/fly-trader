@@ -12,6 +12,13 @@ Usage
 -----
     python run_portfolio.py --plan cycle_b --split test
     python run_portfolio.py --ckpt <path> --use-xsection --turnover-penalty 0.002
+    python run_portfolio.py --ckpt <path> --alloc-gate positive --alloc-min-k 2 --alloc-max-k 4
+
+The allocation has an optional *breadth gate* (``--alloc-gate``): ``topk`` keeps
+only the k most-convicted assets, while ``positive`` keeps exactly the assets the
+policy flags with a positive conviction, so the held breadth k is a **policy
+output**. ``--alloc-min-k``/``--alloc-max-k`` bound it. The gate used to train a
+checkpoint must be passed again here or the allocation will not match.
 """
 from __future__ import annotations
 
@@ -39,6 +46,9 @@ def make_env(args) -> PortfolioEnv:
         use_portfolio_obs=not args.no_portfolio_obs,
         rebalance_every=args.rebalance_every,
         alloc_topk=args.alloc_topk,
+        alloc_gate=getattr(args, "alloc_gate", None),
+        alloc_min_k=getattr(args, "alloc_min_k", 0),
+        alloc_max_k=getattr(args, "alloc_max_k", None),
     )
 
 
@@ -84,6 +94,14 @@ def main():
     p.add_argument("--alloc-topk", type=int, default=None,
                    help="restrict the softmax allocation to the k most-convicted "
                         "assets (plus cash), matching the env used in training")
+    p.add_argument("--alloc-gate", default=None, choices=["none", "topk", "positive"],
+                   help="breadth gate, must match training: 'positive' lets the "
+                        "policy decide k (only assets it flags with positive "
+                        "conviction compete for the budget)")
+    p.add_argument("--alloc-min-k", type=int, default=0,
+                   help="floor on the gated breadth (must match training)")
+    p.add_argument("--alloc-max-k", type=int, default=None,
+                   help="cap on the gated breadth (must match training)")
     p.add_argument("--sample", action="store_true", help="sample (default greedy)")
     p.add_argument("--momentum-lookback", type=int, default=120)
     p.add_argument("--momentum-topk", type=int, default=3)
@@ -111,12 +129,14 @@ def main():
         results["fly"] = run_fly(env, args)
 
     print()
-    header = f"{'strategy':<22} {'ret%':>9} {'maxDD%':>8} {'sharpe':>8} {'turnover':>10} {'trades':>8}"
+    header = (f"{'strategy':<22} {'ret%':>9} {'maxDD%':>8} {'sharpe':>8} "
+              f"{'turnover':>10} {'trades':>8} {'pos':>6}")
     print(header)
     print("-" * len(header))
     for k, v in results.items():
         print(f"{k:<22} {v['total_return_pct']:>9.2f} {v['max_drawdown_pct']:>8.2f} "
-              f"{v['sharpe']:>8.2f} {v['turnover']:>10.1f} {v.get('n_trades', 0):>8d}")
+              f"{v['sharpe']:>8.2f} {v['turnover']:>10.1f} {v.get('n_trades', 0):>8d} "
+              f"{v.get('avg_positions', 0.0):>6.2f}")
 
 
 if __name__ == "__main__":

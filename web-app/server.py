@@ -1124,6 +1124,170 @@ def brain_atlas():
         "total_original": atlas["total_neurons"],
     }
 
+# ── Portfolio (cross-section) engine ───────────────────────────────────────
+# The single-asset engine above is what the 3-D brain and the live telemetry
+# drive. This is the *scope expansion*: one shared policy allocates the whole
+# book across N assets plus a cash slot, rebalanced on a monthly horizon, and
+# the numbers below come from the same honest, split-aware, cost-inclusive,
+# **ticker-holdout** evaluation the README reports (unseen tickers, never-trained
+# window, 10 bps per side). See portfolio_env.PortfolioEnv for the allocation.
+PORTFOLIO_CKPT = Path(os.environ.get(
+    "FLYBRAIN_PORTFOLIO_CKPT",
+    str(Path(__file__).parent / "checkpoints" / "portfolio_fly.pt")))
+PORTFOLIO_PLAN = os.environ.get("FLYBRAIN_PORTFOLIO_PLAN", "cycle")
+PORTFOLIO_SPLIT = os.environ.get("FLYBRAIN_PORTFOLIO_SPLIT", "test")
+PORTFOLIO_UNIVERSE = os.environ.get(
+    "FLYBRAIN_PORTFOLIO_TICKERS", "NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN")
+PORTFOLIO_REBALANCE = int(os.environ.get("FLYBRAIN_PORTFOLIO_REBALANCE", "21"))
+# Breadth gate. "positive" makes the held breadth k a *policy output*; the floor
+# keeps the book invested where the policy's learned conviction threshold
+# under-fires on an unseen cross-section (README, "Adaptive breadth").
+PORTFOLIO_GATE = os.environ.get("FLYBRAIN_PORTFOLIO_GATE", "positive")
+PORTFOLIO_MIN_K = int(os.environ.get("FLYBRAIN_PORTFOLIO_MIN_K", "2"))
+PORTFOLIO_MAX_K = int(os.environ.get("FLYBRAIN_PORTFOLIO_MAX_K", "4"))
+PORTFOLIO_FULL_READOUT = os.environ.get(
+    "FLYBRAIN_PORTFOLIO_FULL_READOUT", "true").lower() == "true"
+# Optional: run the no-RL distilled policy. The checkpoint carries its own
+# weights, so this only matters for the (documented) RL fine-tuning variant.
+_portfolio_cache: dict | None = None
+_portfolio_agent = None
+
+
+def _portfolio_tickers():
+    return [t.strip().upper() for t in PORTFOLIO_UNIVERSE.split(",") if t.strip()]
+
+
+def _build_portfolio_env():
+    from portfolio_env import PortfolioEnv
+    from config import SPLIT_PLANS
+    start, end = SPLIT_PLANS[PORTFOLIO_PLAN][PORTFOLIO_SPLIT]
+    kw = dict(start_date=start, end_date=end, rebalance_every=PORTFOLIO_REBALANCE,
+              alloc_min_k=PORTFOLIO_MIN_K, alloc_max_k=PORTFOLIO_MAX_K)
+    if PORTFOLIO_GATE == "topk":
+        kw["alloc_gate"] = "topk"
+        kw["alloc_topk"] = PORTFOLIO_MIN_K
+    elif PORTFOLIO_GATE != "none":
+        kw["alloc_gate"] = PORTFOLIO_GATE
+    return PortfolioEnv(_portfolio_tickers(), **kw)
+
+
+def _get_portfolio_agent(env):
+    """A second, portfolio-shaped brain instance (the live one is 398-dim
+    single-asset). Built lazily so server startup stays fast."""
+    global _portfolio_agent
+    if _portfolio_agent is not None and _portfolio_agent.obs_dim == env.obs_dim:
+        return _portfolio_agent
+    agent = FlyBrainAgent(obs_dim=env.obs_dim, use_connectome=USE_CONNECTOME,
+                          N_NEURONS=N_NEURONS,
+                          use_full_readout=PORTFOLIO_FULL_READOUT)
+    agent.set_policy_state(torch.load(PORTFOLIO_CKPT, map_location="cpu",
+                                      weights_only=False))
+    agent.eval()
+    _portfolio_agent = agent
+    return agent
+
+
+def _portfolio_sample(points, stride):
+    return points[::stride]
+
+
+@app.get("/portfolio_eval")
+def portfolio_eval(refresh: bool = False):
+    """Held-out cross-section backtest: fly vs buy & hold / trend / momentum.
+
+    Cached after the first call (building the env reads and aligns ~10 CSVs and
+    the brain load is another second); ``?refresh=true`` recomputes it.
+    """
+    global _portfolio_cache
+    if _portfolio_cache is not None and not refresh:
+        return _portfolio_cache
+
+    if not PORTFOLIO_CKPT.is_file():
+        return {
+            "available": False,
+            "checkpoint": PORTFOLIO_CKPT.name,
+            "recipe": ("python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,"
+                       "AMZN,KO,COST,HD,V,MA,ORCL,PG --plan cycle --episodes 0 "
+                       "--rebalance-every 21 --full-readout --alloc-gate positive "
+                       "--alloc-min-k 2 --alloc-max-k 4 --imitate-episodes 10 "
+                       f"--out {PORTFOLIO_CKPT}"),
+        }
+
+    from portfolio_env import (buy_hold_weights, momentum_weights,
+                               trend200_weights)
+
+    env = _build_portfolio_env()
+    agent = _get_portfolio_agent(env)
+
+    def rollout(step_fn):
+        env.reset()
+        equity = [1.0]
+        done = False
+        while not done:
+            _, _, done, info = step_fn(env)
+            equity.append(float(info["value"]))
+        m = env.metrics()
+        m["equity"] = equity
+        return m
+
+    def rule(fn):
+        return lambda e: e._advance(fn(e, e.step_i))
+
+    def fly(e):
+        obs = e.observe()
+        actions = [agent.select_action(obs[a], deterministic=True)[0]
+                   for a in range(e.n_assets)]
+        return e.step(actions)
+
+    strategies = {
+        "fly": rollout(fly),
+        "buy&hold": rollout(rule(lambda e, i: buy_hold_weights(e))),
+        "trend200": rollout(rule(trend200_weights)),
+        "mom120-top3-m": rollout(rule(lambda e, i: momentum_weights(e, i, 120, 3))),
+    }
+
+    n_pts = min(len(v["equity"]) for v in strategies.values())
+    stride = max(1, n_pts // 240)
+    # Each equity point is one *decision*, i.e. `rebalance_every` bars apart.
+    bars = [env.dates[env._bar(min(i, env.n_steps) * PORTFOLIO_REBALANCE)]
+            for i in range(n_pts)]
+
+    out_strats = {}
+    for name, m in strategies.items():
+        out_strats[name] = {
+            "return_pct": round(m["total_return_pct"], 2),
+            "max_drawdown_pct": round(m["max_drawdown_pct"], 2),
+            "sharpe": round(m["sharpe"], 3),
+            "turnover": round(m["turnover"], 2),
+            "n_trades": m["n_trades"],
+            "avg_positions": round(m["avg_positions"], 2),
+            "curve": _portfolio_sample(m["equity"][:n_pts], stride),
+        }
+
+    bh = out_strats["buy&hold"]["return_pct"]
+    _portfolio_cache = {
+        "available": True,
+        "checkpoint": PORTFOLIO_CKPT.name,
+        "plan": PORTFOLIO_PLAN,
+        "split": PORTFOLIO_SPLIT,
+        "date_range": [str(env.dates.min().date()), str(env.dates.max().date())],
+        "tickers": env.tickers,
+        "n_assets": env.n_assets,
+        "n_steps": env.n_steps,
+        "rebalance_every": PORTFOLIO_REBALANCE,
+        "gate": {"mode": PORTFOLIO_GATE, "min_k": PORTFOLIO_MIN_K,
+                 "max_k": PORTFOLIO_MAX_K},
+        "full_readout": PORTFOLIO_FULL_READOUT,
+        "cost_bps": 10,
+        "curve_dates": [d.strftime("%Y-%m-%d") for d in bars[::stride]],
+        "strategies": out_strats,
+        "fly_excess_vs_buyhold_pp": round(out_strats["fly"]["return_pct"] - bh, 2),
+    }
+    print(f"[portfolio] {env.n_assets} assets {PORTFOLIO_PLAN}/{PORTFOLIO_SPLIT}: "
+          f"fly {out_strats['fly']['return_pct']:.1f}% vs bh {bh:.1f}%")
+    return _portfolio_cache
+
+
 # ── Serve brain atlas, flybody & static front-end ──────────────────────────
 _STATIC = Path(__file__).parent
 _ROOT = _STATIC.parent

@@ -708,3 +708,35 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
 .sim-mini-item:hover { border-color: rgba(96,180,255,0.4); background: var(--surface3); }
 .sim-mini-empty { font-size: .65rem; color: var(--txt-dim); text-align: center; padding: .6rem 0; }
 
+/* ── Portfolio (cross-section) tab ───────────────────────────────── */
+#portfolio-equity-chart { width: 100%; height: 170px; display: block; }
+.portfolio-legend-item {
+  display: inline-flex; align-items: center; gap: .28rem; color: var(--txt-muted);
+}
+.portfolio-legend-swatch {
+  width: 9px; height: 3px; border-radius: 2px; display: inline-block;
+}
+.pf-table {
+  display: flex; flex-direction: column; gap: .18rem;
+  font-family: var(--ff-mono); font-size: .61rem;
+}
+.pf-row {
+  display: grid; grid-template-columns: 1.6fr .9fr .9fr .7fr .8fr;
+  gap: .25rem; padding: .26rem .38rem; border-radius: 5px; align-items: center;
+}
+.pf-row.head {
+  color: var(--txt-dim); text-transform: uppercase; font-size: .53rem;
+  letter-spacing: .05em;
+}
+.pf-row.pf-best-row { background: rgba(0,229,255,.07); border: 1px solid rgba(0,229,255,.18); }
+.pf-row.pf-fly-row .pf-name { color: #00e5ff; font-weight: 700; }
+.pf-num { text-align: right; }
+.pf-pos { color: var(--green); }
+.pf-neg { color: var(--red); }
+.pf-error { font-size: .62rem; color: var(--red); line-height: 1.6; }
+.pf-recipe {
+  font-family: var(--ff-mono); font-size: .55rem; color: var(--txt-muted);
+  line-height: 1.5; word-break: break-all; background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 5px; padding: .4rem; margin-top: .4rem;
+}
+

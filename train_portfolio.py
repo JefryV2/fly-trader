@@ -98,6 +98,9 @@ def make_env(tickers, plan, split, args) -> PortfolioEnv:
         beta=args.beta, use_portfolio_obs=not args.no_portfolio_obs,
         rebalance_every=args.rebalance_every,
         alloc_topk=args.alloc_topk,
+        alloc_gate=getattr(args, "alloc_gate", None),
+        alloc_min_k=getattr(args, "alloc_min_k", 0),
+        alloc_max_k=getattr(args, "alloc_max_k", None),
         action_mask=not args.no_action_mask,
     )
 
@@ -222,7 +225,7 @@ def train_episode(agent, env, *, epsilon, train_every, batch_size, min_buffer,
 def evaluate(agent, tickers, plan, split, args, *, n_seeds=1, max_steps=None) -> dict:
     env = make_env(tickers, plan, split, args)
     bh = run_static_weights(env, buy_hold_weights, 1)
-    flys, shs, dds, tos = [], [], [], []
+    flys, shs, dds, tos, poss = [], [], [], [], []
     for k in range(n_seeds):
         rng = np.random.default_rng(args.seed + 1009 * k)
         env.reset()
@@ -239,11 +242,13 @@ def evaluate(agent, tickers, plan, split, args, *, n_seeds=1, max_steps=None) ->
         shs.append(m["sharpe"])
         dds.append(m["max_drawdown_pct"])
         tos.append(m["turnover"] / max(1, env.n_steps))
+        poss.append(m["avg_positions"])
     return {"fly": float(np.mean(flys)), "buyhold": bh["total_return_pct"],
             "excess": float(np.mean(flys)) - bh["total_return_pct"],
             "sharpe": float(np.mean(shs)), "maxdd": float(np.mean(dds)),
             "bh_maxdd": bh["max_drawdown_pct"],
-            "turnover_per_step": float(np.mean(tos))}
+            "turnover_per_step": float(np.mean(tos)),
+            "avg_positions": float(np.mean(poss))}
 
 
 def main():
@@ -316,7 +321,25 @@ def main():
                    help="restrict the softmax allocation to the k most-convicted "
                         "assets (plus cash). Moves cross-sectional selection into "
                         "the env, so the policy only has to rank assets instead of "
-                        "learning an absolute momentum threshold.")
+                        "learning an absolute momentum threshold. Shorthand for "
+                        "--alloc-gate topk.")
+    p.add_argument("--alloc-gate", default=None, choices=["none", "topk", "positive"],
+                   help="breadth gate on the softmax allocation. 'topk' = only the "
+                        "--alloc-topk most-convicted assets compete; 'positive' = "
+                        "only assets the POLICY flags with positive conviction "
+                        "compete, so the held breadth k is a policy output (it can "
+                        "widen and narrow the book step by step) and an all-negative "
+                        "book is a learned 100%% cash de-risk; 'none' = plain softmax.")
+    p.add_argument("--alloc-min-k", type=int, default=0,
+                   help="floor on the gated breadth: always keep at least this many "
+                        "assets (highest conviction first), whatever the policy's "
+                        "absolute conviction looks like. Fixes the measured failure "
+                        "mode where the learned threshold flags too few names on an "
+                        "unseen cross-section.")
+    p.add_argument("--alloc-max-k", type=int, default=None,
+                   help="cap on the gated breadth. With --alloc-gate positive the "
+                        "held breadth is then a policy output in [alloc_min_k, "
+                        "alloc_max_k].")
     p.add_argument("--no-action-mask", dest="no_action_mask", action="store_true",
                    help="do not suppress buy/sell actions by current weight. The "
                         "mask assumes directional actions; the portfolio env uses "
@@ -351,7 +374,11 @@ def main():
     print(f"[portfolio-train] n_assets={probe.n_assets} plan={args.plan} "
           f"steps={probe.n_steps} obs_dim={probe.obs_dim} "
           f"beta={args.beta} turnover_penalty={args.turnover_penalty} "
-          f"xsection={args.use_xsection} full_readout={args.use_full_readout}")
+          f"xsection={args.use_xsection} full_readout={args.use_full_readout} "
+          f"gate={probe.alloc_gate}"
+          + (f"(k={probe.alloc_topk})" if probe.alloc_gate == "topk" else "")
+          + (f"[{probe.alloc_min_k},{probe.alloc_max_k}]"
+             if (probe.alloc_min_k or probe.alloc_max_k is not None) else ""))
     print(f"[portfolio-train] tickers={tickers}")
     print(f"[portfolio-train] holdout ={holdout}")
 
@@ -468,6 +495,7 @@ def main():
                 tag = "  <- best (saved)"
             print(f"          VAL fly={val['fly']:>8.2f}% bh={val['buyhold']:>8.2f}% "
                   f"exc={val['excess']:>7.2f}% sharpe={val['sharpe']:.2f} "
+                  f"pos={val['avg_positions']:.1f} "
                   f"to/step={val['turnover_per_step']:.3f}{tag}")
 
         if (ep + 1) % args.latest_every == 0 or ep == args.episodes - 1:
@@ -493,7 +521,8 @@ def main():
     print(f"  fly={test['fly']:.2f}%  bh={test['buyhold']:.2f}%  "
           f"excess={test['excess']:+.2f}pp  sharpe={test['sharpe']:.2f}  "
           f"maxDD={test['maxdd']:.2f}% (bh {test['bh_maxdd']:.2f}%)  "
-          f"turnover/step={test['turnover_per_step']:.2f}")
+          f"turnover/step={test['turnover_per_step']:.2f}  "
+          f"avg_positions={test['avg_positions']:.2f}")
 
 
 if __name__ == "__main__":

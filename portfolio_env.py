@@ -25,6 +25,15 @@ is rewarded for *tilting into the relatively strongest names* and for *raising
 cash when the whole cross-section falls* (the cash slot earns 0). That is the
 multi-asset generalisation of the trend/momentum edge we measured single-asset.
 
+Breadth gate
+------------
+The softmax is optionally *gated* to a subset of the assets (see
+``alloc_gate``). Gating moves the cross-sectional *selection* out of the shared
+asset-local policy -- which cannot express "I am in the top-k" -- and into the
+env, so the policy only has to rank. With ``alloc_gate="positive"`` the breadth
+k is itself a policy output: exactly the assets the policy flags with a positive
+conviction compete for the budget.
+
 Reward (per asset, decomposed so the shared policy gets a clean gradient)::
 
     r_a = w_a * ret_a - w_a_is_cost - turnover_penalty * |w_a - w_a_prev|
@@ -57,7 +66,9 @@ class PortfolioEnv:
                  turnover_penalty: float = 0.002, indicator_norm: str = "per_feature",
                  beta: float = 2.0, max_weight: float = 1.0,
                  use_portfolio_obs: bool = True, rebalance_every: int = 1,
-                 alloc_topk: int = None, action_mask: bool = True):
+                 alloc_topk: int = None, alloc_gate: str = None,
+                 alloc_min_k: int = 0, alloc_max_k: int = None,
+                 action_mask: bool = True):
         self.tickers = list(tickers)
         self.n_assets = len(self.tickers)
         self.envs = [
@@ -117,19 +128,51 @@ class PortfolioEnv:
         # cross-sectional momentum edge only appears over weeks/months, so the
         # reward must be measured over that horizon (e.g. 21 bars = monthly).
         self.rebalance_every = max(1, int(rebalance_every))
-        # Optional top-k allocation gate. With asset-local features a shared
-        # policy can only express "my own momentum is above an absolute
-        # threshold", never "I am in the top-k of the cross-section" -- so the
-        # breadth it holds on an unseen universe is an accident of where that
-        # universe's momentum levels fall. Gating the softmax to the k highest
-        # convictions moves the cross-sectional selection *into the env*: the
-        # policy only has to rank assets, which a monotone momentum map does.
+        # Optional breadth gate on the softmax allocation. With asset-local
+        # features a shared policy can only express "my own momentum is above an
+        # absolute threshold", never "I am in the top-k of the cross-section" --
+        # so the breadth it holds on an unseen universe is an accident of where
+        # that universe's momentum levels fall. Gating the softmax moves the
+        # cross-sectional selection *into the env*: the policy only has to rank
+        # assets, which a monotone momentum map does.
+        #
+        #   "none"     : every asset competes (the plain softmax).
+        #   "topk"     : only the k most-convicted assets compete. k is a fixed
+        #                hyperparameter.
+        #   "positive" : only assets the policy *itself* flags with positive
+        #                conviction compete (plus cash). Here **k is a policy
+        #                output**: breadth is the number of assets the policy
+        #                gives one of the three buy-actions, so the policy can
+        #                widen and narrow the book step by step instead of
+        #                holding a hard-coded k. An all-negative book means all
+        #                cash, i.e. a learned full de-risk.
         self.alloc_topk = None if alloc_topk is None else max(1, int(alloc_topk))
+        if alloc_gate is None:
+            alloc_gate = "topk" if self.alloc_topk is not None else "none"
+        alloc_gate = str(alloc_gate).lower()
+        if alloc_gate not in ("none", "topk", "positive"):
+            raise ValueError(f"alloc_gate must be one of none|topk|positive, "
+                             f"got {alloc_gate!r}")
+        if alloc_gate == "topk" and self.alloc_topk is None:
+            raise ValueError("alloc_gate='topk' requires alloc_topk")
+        self.alloc_gate = alloc_gate
+        # Optional bounds on the gated breadth. With the "positive" gate the
+        # policy decides k, but its conviction scale need not generalise to an
+        # unseen cross-section: on a new universe the learned threshold can flag
+        # far fewer (or more) assets than the teacher does. A floor keeps the
+        # book invested (``max(min_k, #positive)``) and a cap stops it
+        # over-concentrating, while the policy still owns everything in between.
+        self.alloc_min_k = max(0, int(alloc_min_k))
+        self.alloc_max_k = None if alloc_max_k is None else max(1, int(alloc_max_k))
+        if self.alloc_max_k is not None and self.alloc_min_k > self.alloc_max_k:
+            raise ValueError("alloc_min_k must be <= alloc_max_k")
+        self.gated = (self.alloc_gate != "none" or self.alloc_min_k > 0
+                      or self.alloc_max_k is not None)
         # Whether the trainer should suppress "buy" actions on fully-invested
         # assets and "sell" actions on empty ones. That mask belongs to
         # directional actions; with conviction-style actions (and especially with
-        # alloc_topk) it is wrong, so it is off by default there.
-        self.action_mask = bool(action_mask) and alloc_topk is None
+        # any breadth gate) it is wrong, so it is off by default there.
+        self.action_mask = bool(action_mask) and not self.gated
         self.reset()
 
     # ── helpers ────────────────────────────────────────────────────────────
@@ -167,16 +210,37 @@ class PortfolioEnv:
     def weights_from_actions(self, actions) -> np.ndarray:
         """Softmax conviction allocation over (assets + cash).
 
-        With ``alloc_topk`` set, only the k most-convicted assets compete for the
-        budget (plus the cash slot); the rest are excluded. The env then supplies
-        the cross-sectional selection, so the policy only needs to *rank*.
+        The breadth *gate* decides which assets may compete for the budget::
+
+          * ``none``     -- all of them;
+          * ``topk``     -- the ``alloc_topk`` most-convicted ones;
+          * ``positive`` -- the ones the policy flagged with a positive
+                            conviction (so **k is a policy output**).
+
+        The env then supplies the cross-sectional selection, so the policy only
+        needs to *rank* assets rather than learn an absolute threshold.
         """
         d = DESIRES[np.asarray(actions, dtype=int)]
         logits = np.concatenate([self.beta * d, [0.0]])          # last = cash
-        if self.alloc_topk is not None and self.alloc_topk < self.n_assets:
-            keep = np.argsort(-logits[:self.n_assets])[:self.alloc_topk]
-            mask = np.zeros(self.n_assets + 1, dtype=bool)
-            mask[keep] = True
+        if self.gated:
+            n = self.n_assets
+            asset_logits = logits[:n]
+            if self.alloc_gate == "positive":
+                chosen = np.flatnonzero(d > 0.0)
+            elif self.alloc_gate == "topk":
+                chosen = np.argsort(-asset_logits)[:min(self.alloc_topk, n)]
+            else:
+                chosen = np.arange(n)
+            # Floor: never hold fewer than alloc_min_k names, whatever the
+            # policy's absolute conviction looks like on an unseen universe.
+            if self.alloc_min_k > chosen.size:
+                order = np.argsort(-asset_logits)
+                chosen = np.unique(np.concatenate([chosen, order[:self.alloc_min_k]]))
+            # Cap: never hold more than alloc_max_k.
+            if self.alloc_max_k is not None and chosen.size > self.alloc_max_k:
+                chosen = chosen[np.argsort(-asset_logits[chosen])[:self.alloc_max_k]]
+            mask = np.zeros(n + 1, dtype=bool)
+            mask[chosen] = True
             mask[-1] = True                                      # cash always stays
             logits = np.where(mask, logits, -np.inf)
         logits -= logits.max()
@@ -192,6 +256,7 @@ class PortfolioEnv:
         self.last_trade_step = [-10] * self.n_assets
         self.value = 1.0
         self.history = [1.0]
+        self.breadth = []           # names held (weight > 0), one entry per decision
         self.turnover_total = 0.0
         self.n_trades = 0
         return self.observe()
@@ -235,6 +300,7 @@ class PortfolioEnv:
             if self.weights[a] <= 1e-6:
                 self.entry[a] = None
         self.turnover_total += float(turnover.sum())
+        self.breadth.append(int((self.weights > 1e-6).sum()))
         port_ret = float(targets @ rets - cost.sum())
         self.value *= (1.0 + port_ret)
         self.history.append(self.value)
@@ -270,6 +336,12 @@ class PortfolioEnv:
             "sharpe": sharpe,
             "turnover": float(self.turnover_total),
             "n_trades": int(self.n_trades),
+            # Breadth actually held (weight > 0). With the "positive" gate this
+            # is the k the *policy* chose, so reporting it is how we show the
+            # gate is adaptive rather than hard-coded.
+            "avg_positions": float(np.mean(self.breadth)) if self.breadth else 0.0,
+            "min_positions": int(min(self.breadth)) if self.breadth else 0,
+            "max_positions": int(max(self.breadth)) if self.breadth else 0,
         }
 
 
