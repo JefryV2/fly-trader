@@ -51,6 +51,47 @@ def test_weights_are_non_negative_and_normalised():
         assert w.sum() <= 1.0 + 1e-9
 
 
+def test_topk_gate_excludes_all_but_the_k_most_convicted():
+    # Without the gate every asset gets some budget; with the gate only the k
+    # most-convicted assets do, so the env (not the policy) performs the
+    # cross-sectional selection and the policy only has to rank.
+    ungated = make().weights_from_actions([3, 3, 6])
+    assert np.all(ungated > 0.0)
+
+    gated = make(alloc_topk=1).weights_from_actions([3, 3, 6])
+    assert gated[2] == 0.0
+    assert gated[0] > 0.0 and gated[1] == 0.0
+    assert gated.sum() <= 1.0 + 1e-9
+
+    gated2 = make(alloc_topk=2).weights_from_actions([3, 3, 6])
+    assert gated2[2] == 0.0
+    assert np.isclose(gated2[0], gated2[1])
+
+
+def test_topk_gate_with_k_ge_n_assets_is_the_plain_softmax():
+    plain = make().weights_from_actions([3, 6, 0])
+    wide = make(alloc_topk=3).weights_from_actions([3, 6, 0])
+    wider = make(alloc_topk=9).weights_from_actions([3, 6, 0])
+    assert np.allclose(plain, wide)
+    assert np.allclose(plain, wider)
+
+
+def test_topk_gate_keeps_the_full_topk_invested():
+    # k winners all at max conviction should hold an equal share of almost the
+    # whole budget (cash keeps only its own 1/(1 + k*e^beta) slice), i.e. the gate
+    # can express the momentum rule faithfully.
+    env = make(alloc_topk=2)
+    w = env.weights_from_actions([3, 3, 0])
+    exp_beta = np.exp(2.0)
+    expected = exp_beta / (1.0 + 2.0 * exp_beta)
+    assert np.isclose(w[0], expected, atol=1e-6)
+    assert np.isclose(w[1], expected, atol=1e-6)
+    assert np.isclose(w[0], w[1])
+    assert w[2] == 0.0
+    assert 2.0 * expected > 0.9            # nearly fully invested
+    assert w.sum() < 1.0
+
+
 def test_decomposed_rewards_sum_to_net_portfolio_return():
     env = make(turnover_penalty=0.0)
     env.reset()

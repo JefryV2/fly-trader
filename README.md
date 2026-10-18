@@ -683,6 +683,81 @@ to +26 across universes) — at low turnover and with no dependence on a lucky
 split. It does *not* approach the simple momentum rotation rule (+79 pp), which
 remains by far the strongest honest strategy in this repository.
 
+### Warm-starting from the rule: distillation and the top-k gate
+
+The from‑scratch fly captures the momentum edge only weakly, while a two‑line rule
+earns +79 pp. So the rule is distilled into the policy first, and RL then
+fine‑tunes from that starting point.
+
+**Distillation.** At each decision bar the rule's book is turned into per‑asset
+conviction labels — the top‑k names get the maximal conviction
+(`DESIRES[3] = +1`), everything else the minimal (`DESIRES[6] = −1`) — and the
+policy is trained by cross‑entropy on those labels before RL begins
+(`train_portfolio.py --imitate-episodes N`). With 10 episodes the final
+cross‑entropy is ≈ 0.26 (chance is ln 7 ≈ 1.95).
+
+**What it learned was not the rule.** Diagnostic on the held‑out window:
+
+| | distilled fly | mom120‑top3 rule |
+|---|---:|---:|
+| assets held (> 2 %) | 1.93 | 3.00 |
+| cash | 0.10 | 0.00 |
+| largest weight | 0.597 | 0.333 |
+| average weight NVDA | 0.417 | 0.219 |
+
+The policy holds ≈ 2 names at ≈ double the concentration. The reason is
+structural: every feature is *asset‑local*, so a shared per‑asset policy can only
+express "my own momentum is above an absolute threshold" — never "I am in the
+top‑k of the cross‑section". The breadth it holds on an unseen universe is
+therefore an accident of where that universe's momentum levels fall relative to a
+threshold learned on the training universe.
+
+**The fix: let the env do the selection (`--alloc-topk k`).** Only the k
+most‑convicted assets (plus the cash slot) compete for the budget. The policy now
+only has to *rank* assets — which a monotone momentum map does — and the
+cross‑sectional competition is supplied by the environment. Mean excess over 9
+seed/budget configs (2 seeds × 5/10/20 imitation episodes), each evaluated on 5
+never‑trained settings:
+
+| eval setting | no gate | **top‑3 gate** |
+|---|---:|---:|
+| S1 (contains NVDA/META) | +197 | **+212** (9/9) |
+| S2 | −10.5 | −2.5 (3/9) |
+| S3 | +5.8 | **+24.2** (8/9) |
+| S4 | −10.9 | **+15.4** (6/9) |
+| bear 2022 | +18.6 | **+29.8** (8/9) |
+| **positive configs** | 24/45 | **35/45** |
+
+**A latent bug this exposed.** The trainer suppressed "sell" actions on
+zero‑weight assets (`masked_probs`). That mask belongs to *directional* actions;
+portfolio actions are absolute conviction levels, so masking them is wrong — and
+with the gate it is actively harmful, because the excluded assets are exactly the
+ones that need the lowest conviction. The same gated checkpoint scored +106 pp
+through the masked trainer path and +237 pp through the unmasked evaluation path;
+with the mask disabled for gated runs the two paths agree to the basis point
+(+237.40 pp both). The gate now implies `action_mask = False`.
+
+**Honest headline result** (seed 0, 10 imitation episodes, monthly, whole‑brain
+read‑out, top‑3 gate, no RL fine‑tune yet):
+
+| | fly | buy & hold |
+|---|---:|---:|
+| validation (train universe, 2020–2021H1) | +63.7 pp | — |
+| **test (2021H2–2024, 10 unseen tickers)** | **322.2 % (+237.4 pp)** | 84.8 % |
+| max drawdown | **18.7 %** | 24.9 % |
+| Sharpe | **1.58** | 1.04 |
+| turnover / step | 0.01 | — |
+
+Every one of the 9 seed/budget configs was positive on this holdout (+96 to
++427 pp), so this is not a lucky initialisation.
+
+**Caveat, stated plainly.** This is not "the fly discovers the momentum edge from
+nothing". The policy is *warm‑started from the rule*; what the experiment shows
+is that the rule's information is representable by this policy and that letting
+the **environment** perform the cross‑sectional selection is what makes it
+transfer to unseen universes. S2 (where the rule itself earns +42.6 pp) is still
+slightly negative, so the gate helps broadly but does not make the edge uniform.
+
 ```bash
 python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
     --plan cycle --episodes 400 --rebalance-every 21 --full-readout
@@ -875,7 +950,7 @@ hold by construction — it can only add value on top of it.
 | P1 | ✅ Deterministic feature encoding + live sensory channel (policy can see the market) |
 | P1 | Make `per_feature` indicator normalisation the default and retrain |
 | P0 | ✅ **Multi‑asset portfolio environment + baselines** (`portfolio_env.py`, `run_portfolio.py`) |
-| P0 | ✅ **Fly beats buy & hold on unseen portfolios, honestly by a small margin** (+26 pp on the original split, +2.9 pp walk‑forward fold mean, +5.6 pp across disjoint never‑trained sets) |
+| P0 | ✅ **Fly beats buy & hold on unseen portfolios** — +26 pp on the original split, +2.9 pp walk‑forward fold mean from scratch, and **+237 pp on the original holdout with a top‑k‑gated warm start from the momentum rule** |
 | P0 | ✅ **Softmax conviction allocation** with an explicit turnover penalty (fixes churn) |
 | P1 | ✅ **Whole‑brain read‑out** (`--full-readout`: all regions feed the policy) |
 | P1 | ✅ **Portfolio trainer** (`train_portfolio.py`) — learn the cross‑section allocation |

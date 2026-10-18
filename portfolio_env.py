@@ -56,7 +56,8 @@ class PortfolioEnv:
                  use_xsection: bool = False, transaction_cost: float = 0.001,
                  turnover_penalty: float = 0.002, indicator_norm: str = "per_feature",
                  beta: float = 2.0, max_weight: float = 1.0,
-                 use_portfolio_obs: bool = True, rebalance_every: int = 1):
+                 use_portfolio_obs: bool = True, rebalance_every: int = 1,
+                 alloc_topk: int = None, action_mask: bool = True):
         self.tickers = list(tickers)
         self.n_assets = len(self.tickers)
         self.envs = [
@@ -116,6 +117,19 @@ class PortfolioEnv:
         # cross-sectional momentum edge only appears over weeks/months, so the
         # reward must be measured over that horizon (e.g. 21 bars = monthly).
         self.rebalance_every = max(1, int(rebalance_every))
+        # Optional top-k allocation gate. With asset-local features a shared
+        # policy can only express "my own momentum is above an absolute
+        # threshold", never "I am in the top-k of the cross-section" -- so the
+        # breadth it holds on an unseen universe is an accident of where that
+        # universe's momentum levels fall. Gating the softmax to the k highest
+        # convictions moves the cross-sectional selection *into the env*: the
+        # policy only has to rank assets, which a monotone momentum map does.
+        self.alloc_topk = None if alloc_topk is None else max(1, int(alloc_topk))
+        # Whether the trainer should suppress "buy" actions on fully-invested
+        # assets and "sell" actions on empty ones. That mask belongs to
+        # directional actions; with conviction-style actions (and especially with
+        # alloc_topk) it is wrong, so it is off by default there.
+        self.action_mask = bool(action_mask) and alloc_topk is None
         self.reset()
 
     # ── helpers ────────────────────────────────────────────────────────────
@@ -151,9 +165,20 @@ class PortfolioEnv:
         return np.stack([self._obs_for(a, self.step_i) for a in range(self.n_assets)])
 
     def weights_from_actions(self, actions) -> np.ndarray:
-        """Softmax conviction allocation over (assets + cash)."""
+        """Softmax conviction allocation over (assets + cash).
+
+        With ``alloc_topk`` set, only the k most-convicted assets compete for the
+        budget (plus the cash slot); the rest are excluded. The env then supplies
+        the cross-sectional selection, so the policy only needs to *rank*.
+        """
         d = DESIRES[np.asarray(actions, dtype=int)]
         logits = np.concatenate([self.beta * d, [0.0]])          # last = cash
+        if self.alloc_topk is not None and self.alloc_topk < self.n_assets:
+            keep = np.argsort(-logits[:self.n_assets])[:self.alloc_topk]
+            mask = np.zeros(self.n_assets + 1, dtype=bool)
+            mask[keep] = True
+            mask[-1] = True                                      # cash always stays
+            logits = np.where(mask, logits, -np.inf)
         logits -= logits.max()
         e = np.exp(logits)
         w = e / e.sum()

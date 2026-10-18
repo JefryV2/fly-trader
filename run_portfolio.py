@@ -38,6 +38,7 @@ def make_env(args) -> PortfolioEnv:
         beta=args.beta,
         use_portfolio_obs=not args.no_portfolio_obs,
         rebalance_every=args.rebalance_every,
+        alloc_topk=args.alloc_topk,
     )
 
 
@@ -80,6 +81,9 @@ def main():
                    help="rebalance horizon in bars (21 = monthly); the reward is the "
                         "return over that horizon")
     p.add_argument("--ckpt", default=None, help="fly checkpoint to evaluate")
+    p.add_argument("--alloc-topk", type=int, default=None,
+                   help="restrict the softmax allocation to the k most-convicted "
+                        "assets (plus cash), matching the env used in training")
     p.add_argument("--sample", action="store_true", help="sample (default greedy)")
     p.add_argument("--momentum-lookback", type=int, default=120)
     p.add_argument("--momentum-topk", type=int, default=3)
