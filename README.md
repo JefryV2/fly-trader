@@ -782,10 +782,22 @@ Running 300 RL episodes on top of the distilled policy (low exploration, gentle
 learning rate, large replay warm‑up) *raised* validation from +63.7 pp to
 +82.3 pp and collapsed the held‑out test from +237.4 pp to +32.6 pp. Rewarding the
 policy against the validation universe lets it exploit that universe — which
-contains TSLA at +322 % — rather than the strategy. So the distilled policy is
-what ships, RL is optional, and the fix the numbers call for is to keep the
-teacher in the loop: `--anchor-every N` re‑distils every N episodes so fine‑tuning
-can refine without drifting away.
+contains TSLA at +322 % — rather than the strategy.
+
+Keeping the teacher in the loop (`--anchor-every 20`, i.e. re‑distil every 20
+episodes) prevents that catastrophe but still adds nothing:
+
+| configuration | validation | S1 | S2 | S3 | S4 | bear22 | 2024 | subset mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **distilled only (recommended)** | +63.7 | **+237.4** | −16.7 | **+46.9** | **+22.9** | **+41.2** | **+0.7** | **+72.6** |
+| RL, no anchor | +82.3 | +32.6 | — | — | — | — | — | — |
+| RL, anchored every 20 ep | **+104.2** | +235.6 | −41.1 | −24.6 | +14.4 | +33.8 | −15.8 | +46.1 |
+
+Anchoring preserves the headline but flips S2/S3 negative, turns 2024 negative and
+raises the S1 drawdown from 18.7 % to 23.4 %. **The warm start is the whole win**:
+RL either destroys the policy or leaves it roughly where distillation put it,
+while reducing its breadth. The recommended configuration therefore ships the
+distilled policy with no RL.
 
 **The teacher's hyper‑parameters are not selectable either.** Distilling on
 2015–2019 and selecting (lookback, top‑k) on 2020H1 + 2021H1 — both strictly
@@ -824,6 +836,21 @@ positive in **4 of 5**:
 | S3 | +46.9 pp | |
 | S4 | +22.9 pp | the rule *loses* 21 pp here |
 | 2022 bear | **+41.2 pp** | capital preservation |
+
+Reproduce the recommended policy exactly (`--episodes 0` = distillation only, no RL):
+
+```bash
+python train_portfolio.py \
+    --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
+    --plan cycle --episodes 0 --rebalance-every 21 --full-readout \
+    --alloc-topk 3 --imitate-episodes 10 --out portfolio_fly_momentum.pt
+
+python run_portfolio.py --plan cycle --split test --rebalance-every 21 \
+    --full-readout --alloc-topk 3 --ckpt portfolio_fly_momentum.pt
+```
+
+(`--alloc-topk 3` must match `--teacher-topk 3`, and both evaluation paths agree
+to the basis point.)
 
 ```bash
 python train_portfolio.py --tickers MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG \
