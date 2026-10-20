@@ -1200,6 +1200,14 @@ checkpoint trained with them — the shipped checkpoints keep the 88‑dim layou
 Memory is single‑asset only: a cross‑section is many assets at one instant, not
 one asset across time. Reproduce with `python scripts/probe_readout.py`.
 
+The matched policy A/B (10 tickers, 20 episodes, seed 0) is more sober: the
+wide+memory agent cleared the validation threshold by +0.37 % and actually
+traded (1–12 times per ticker, versus the buy & hold fallback's single trade),
+but finished **−0.58 pp** behind buy & hold on test (27.62 % versus 28.21 %,
+Sharpe 1.05 versus 1.09, max drawdown 15.8 versus 15.7). Better behaved than the
+4,096 arm (−5.51 pp), still not an edge. The features are real; the policy is
+not yet profitable at this budget.
+
 Parallelism is a different axis. Extra neurons add per‑step cost (0.49 ms/obs
 at 1,024, 1.59 ms at 4,096) and run nothing concurrently. What does help is
 settling B independent observations through the same `W` as one `(N, B)`

@@ -307,6 +307,9 @@ def main():
     p.add_argument("--xsection", dest="use_xsection", action="store_true")
     p.add_argument("--full-readout", dest="use_full_readout", action="store_true",
                    help="let the read-out draw on ALL brain regions (AL/KC/CX/DAN/MBON)")
+    p.add_argument("--full-readout-proj", type=int, default=8,
+                   help="width of the whole-brain projection (256 is the width 4096 "
+                        "neurons would offer, at 1024 neurons)")
     p.add_argument("--no-portfolio-obs", dest="no_portfolio_obs", action="store_true",
                    help="zero the position block in the observation. The allocation is "
                         "absolute (weight = softmax(conviction)), so the policy does not "
@@ -384,7 +387,8 @@ def main():
 
     agent = FlyBrainAgent(obs_dim=probe.obs_dim, use_connectome=True,
                           use_xsection=args.use_xsection,
-                          use_full_readout=args.use_full_readout)
+                          use_full_readout=args.use_full_readout,
+                          full_readout_proj=args.full_readout_proj)
     agent.optimizer.param_groups[0]["lr"] = args.lr
     agent.buy_margin_coef = 0.0
     if args.target_entropy is not None:
