@@ -1208,6 +1208,21 @@ Sharpe 1.05 versus 1.09, max drawdown 15.8 versus 15.7). Better behaved than the
 4,096 arm (−5.51 pp), still not an edge. The features are real; the policy is
 not yet profitable at this budget.
 
+The portfolio path was the strongest hope, and it is the clearest negative.
+Same recipe, same seed, same 10 unseen tickers — only the projection width
+changed (10 imitation episodes, 12 assets):
+
+| projection width | val vs B&H | test vs B&H | Sharpe | maxDD |
+|---|---:|---:|---:|---:|
+| **8 (shipped)** | **+64.8 pp** | **+242.5 pp** (327.3 % vs 84.8 %) | 1.58 | 18.9 % |
+| 64 | −11.8 pp (guard rejects) | +147.5 pp | 1.43 | 12.1 % |
+| 256 | +37.5 pp | +38.5 pp (123.3 % vs 84.8 %) | 1.12 | 14.9 % |
+
+Wider features improved the ridge probe but *degraded* the distilled policy:
+the fixed 128/64 read-out has to learn from 349 inputs with 10 imitation
+episodes, and the extra dimensions dilute the signal it was fitted on. The
+shipped 8-dim checkpoint stays deployed.
+
 Parallelism is a different axis. Extra neurons add per‑step cost (0.49 ms/obs
 at 1,024, 1.59 ms at 4,096) and run nothing concurrently. What does help is
 settling B independent observations through the same `W` as one `(N, B)`
