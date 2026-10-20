@@ -1614,6 +1614,31 @@ def _combo_key(combo, split):
             PORTFOLIO_REBALANCE)
 
 
+def _combo_coverage(tickers, split):
+    """Rows each ticker has inside ``split``, using the env's own CSV loader.
+
+    The combo lab ranks on validation, so a ticker whose history starts after
+    that window cannot take part. AAPL's local file, for example, only covers
+    the 2022-2024 live window. Checking up front turns a per-combo exception
+    into a precise message and lets the search run on the usable tickers.
+    """
+    from config import SPLIT_PLANS
+    from env import _load_ohlcv
+    start, end = SPLIT_PLANS[PORTFOLIO_PLAN][split]
+    start, end = str(start), str(end)
+    out = {}
+    for t in tickers:
+        try:
+            df = _load_ohlcv(DATA_DIR / f"{t}_daily.csv")
+            rows = int(((df.index >= start) & (df.index <= end)).sum())
+            out[t] = {"rows": rows,
+                      "first": str(df.index.min().date()),
+                      "last": str(df.index.max().date())}
+        except Exception:
+            out[t] = {"rows": 0, "first": None, "last": None}
+    return out, start, end
+
+
 def _combo_env(tickers, split):
     from portfolio_env import PortfolioEnv
     from config import SPLIT_PLANS
@@ -1670,32 +1695,48 @@ def _combo_worker(job_id, combos, refresh):
         probe = _combo_env(combos[0], "val")
         agent = _load_portfolio_agent(probe.obs_dim)
         del probe
+        failed = 0
         for i, combo in enumerate(combos):
             key = _combo_key(combo, "val")
-            row = None if refresh else _COMBO_ROWS.get(key)
-            if row is None:
-                row = _combo_rollout(combo, "val", agent)
-                _COMBO_ROWS[key] = row
-            results.append(row)
+            try:
+                row = None if refresh else _COMBO_ROWS.get(key)
+                if row is None:
+                    row = _combo_rollout(combo, "val", agent)
+                    _COMBO_ROWS[key] = row
+                results.append(row)
+            except Exception as exc:
+                # One bad subset (a calendar gap, a bad row) must not kill a
+                # 200-combo search; keep it in the results as a skipped row.
+                failed += 1
+                results.append({"combo": list(combo), "split": "val",
+                                "error": str(exc)})
             with _COMBO_LOCK:
                 job["done"] = i + 1
+                job["failed"] = failed
                 job["results"] = rank(results)[:12]
                 job["summary"] = summarise(results, len(combos))
         ranked = rank(results)
+        if not ranked:
+            first = next((r["error"] for r in results if r.get("error")),
+                         "unknown error")
+            raise RuntimeError(f"all {len(combos)} combos failed: {first}")
         best = None
         if ranked:
             top = ranked[0]
             key = _combo_key(top["combo"], "test")
-            test = None if refresh else _COMBO_ROWS.get(key)
-            if test is None:
-                with _COMBO_LOCK:
-                    job["phase"] = "test"
-                test = _combo_rollout(top["combo"], "test", agent)
-                _COMBO_ROWS[key] = test
             best = dict(top)
-            best["test"] = test
-            best["test_is_ticker_holdout"] = not any(
-                t in COMBO_TRAIN_TICKERS for t in best["combo"])
+            try:
+                test = None if refresh else _COMBO_ROWS.get(key)
+                if test is None:
+                    with _COMBO_LOCK:
+                        job["phase"] = "test"
+                    test = _combo_rollout(top["combo"], "test", agent)
+                    _COMBO_ROWS[key] = test
+                best["test"] = test
+                best["test_is_ticker_holdout"] = not any(
+                    t in COMBO_TRAIN_TICKERS for t in best["combo"])
+            except Exception as exc:
+                best["test_error"] = str(exc)
         with _COMBO_LOCK:
             job.update(status="done", phase=None, best=best,
                        results=ranked[:12],
@@ -1732,6 +1773,30 @@ def start_combo_search(payload: ComboPayload):
         raise HTTPException(
             400, f"Portfolio checkpoint missing ({PORTFOLIO_CKPT.name}); "
                  "train it with the recipe in README first.")
+    from config import WINDOW_SIZE
+    need = WINDOW_SIZE + 2 * PORTFOLIO_REBALANCE
+    cov, val_start, val_end = _combo_coverage(pool, "val")
+    excluded, usable = [], []
+    for t in pool:
+        c = cov[t]
+        if c["rows"] < need:
+            covered = (f"{c['first']}..{c['last']}"
+                       if c["first"] else "no readable data")
+            excluded.append({
+                "ticker": t,
+                "rows": c["rows"],
+                "reason": (f"{c['rows']} rows in the validation window "
+                           f"{val_start}..{val_end} (needs {need}); "
+                           f"history covers {covered}"),
+            })
+        else:
+            usable.append(t)
+    pool = usable
+    if len(pool) < size:
+        detail = "; ".join(f"{e['ticker']}: {e['reason']}" for e in excluded)
+        raise HTTPException(
+            400, f"Not enough tickers with validation data for {size}-stock "
+                 f"combos. {detail}")
     combos = combos_for(pool, size)
     if len(combos) > MAX_COMBOS:
         raise HTTPException(
@@ -1744,7 +1809,8 @@ def start_combo_search(payload: ComboPayload):
         job_id = uuid.uuid4().hex[:12]
         _COMBO_JOBS[job_id] = {
             "job_id": job_id, "status": "queued", "phase": "val",
-            "pool": pool, "size": size, "done": 0, "total": len(combos),
+            "pool": pool, "size": size, "done": 0, "failed": 0,
+            "total": len(combos), "excluded": excluded,
             "results": [], "summary": {"evaluated": 0, "total": len(combos)},
             "best": None, "error": None, "elapsed_s": 0.0,
         }
@@ -1752,7 +1818,7 @@ def start_combo_search(payload: ComboPayload):
                      args=(job_id, combos, bool(payload.refresh)),
                      daemon=True).start()
     return {"job_id": job_id, "pool": pool, "size": size,
-            "total": len(combos)}
+            "total": len(combos), "excluded": excluded}
 
 
 @app.get("/combo_search/{job_id}")

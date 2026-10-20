@@ -69,15 +69,23 @@ def test_summary_counts_the_distribution_not_just_the_winner():
             _row(("E", "F"), 12.0, 9.0)]      # +3
     s = summarise(rows, total=3)
     assert s == {
-        "evaluated": 3, "total": 3, "beat_bh": 2,
+        "evaluated": 3, "total": 3, "failed": 0, "beat_bh": 2,
         "median_excess_pct": 3.0, "mean_excess_pct": 6.67,
         "median_return_pct": 12.0,
     }
 
 
+def test_summary_counts_failed_combos():
+    rows = [_row(("A", "B"), 30.0, 10.0),
+            {"combo": ["C", "D"], "error": "not enough rows"}]
+    s = summarise(rows, total=2)
+    assert s["evaluated"] == 1 and s["failed"] == 1 and s["total"] == 2
+
+
 def test_summary_with_no_results_is_empty_not_an_error():
     s = summarise([{"combo": ["A", "B"], "error": "boom"}], total=1)
     assert s["evaluated"] == 0 and s["beat_bh"] == 0
+    assert s["failed"] == 1
     assert s["median_excess_pct"] is None
 
 

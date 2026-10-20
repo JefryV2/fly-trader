@@ -75,6 +75,7 @@ def summarise(results, total: int) -> dict:
     total = int(total)
     if not ok:
         return {"evaluated": 0, "total": total, "beat_bh": 0,
+                "failed": total,
                 "median_excess_pct": None, "mean_excess_pct": None,
                 "median_return_pct": None}
     ex = [float(r.get("excess_pct", 0.0)) for r in ok]
@@ -82,6 +83,7 @@ def summarise(results, total: int) -> dict:
     return {
         "evaluated": len(ok),
         "total": total,
+        "failed": total - len(ok),
         "beat_bh": sum(1 for e in ex if e > 0),
         "median_excess_pct": round(median(ex), 2),
         "mean_excess_pct": round(mean(ex), 2),

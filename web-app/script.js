@@ -466,6 +466,10 @@ async function runComboSearch() {
     comboJobId = d.job_id;
     comboFails = 0;
     badge.textContent = `0 / ${d.total}`;
+    const skippedNow = (d.excluded || []).map(e => e.ticker);
+    if (skippedNow.length) {
+      setComboStatus(`Skipping ${skippedNow.join(', ')}: no data in the validation window.`);
+    }
     comboPoll = setTimeout(pollCombo, 400);
   } catch (e) {
     btn.disabled = false;
@@ -479,21 +483,25 @@ function renderCombo(d) {
   const badge = $('combo-badge');
   const total = Number(d.total) || 0;
   const done = Number(d.done) || 0;
+  const skipped = (d.excluded && d.excluded.length)
+    ? ` · skipped ${d.excluded.map(e => e.ticker).join(', ')} (no validation data)`
+    : '';
+  const failed = Number(d.failed) > 0 ? ` · ${d.failed} failed` : '';
 
   if (d.status === 'done') {
     badge.textContent = 'done';
     badge.className = 'combo-badge done';
     $('combo-bar').style.width = '100%';
-    setComboStatus(`Evaluated ${done} combos in ${d.elapsed_s}s · ranked on validation.`, 'ok');
+    setComboStatus(`Evaluated ${done} combos in ${d.elapsed_s}s · ranked on validation${skipped}${failed}.`, 'ok');
   } else if (d.status === 'error') {
     badge.textContent = 'error';
     badge.className = 'combo-badge err';
-    setComboStatus(d.error || 'Search failed', 'err');
+    setComboStatus(`${d.error || 'Search failed'}${skipped}`, 'err');
   } else {
     badge.textContent = `${done} / ${total}`;
     badge.className = 'combo-badge live';
     const phase = d.phase === 'test' ? ' · now running the winner on test' : '';
-    setComboStatus(`Fly evaluating combo ${done} / ${total}${phase}…`);
+    setComboStatus(`Fly evaluating combo ${done} / ${total}${phase}…${skipped}`);
     $('combo-bar').style.width = total ? `${Math.round((100 * done) / total)}%` : '0%';
   }
 
@@ -530,14 +538,25 @@ function renderCombo(d) {
           · Sh ${(Number(t.sharpe) || 0).toFixed(2)}</div>
         <button type="button" class="combo-use" data-combo="${(b.combo || []).join(',')}">Use this combo</button>
       </div>`;
+  } else if (d.best && d.best.test_error) {
+    $('combo-best').innerHTML = `
+      <div class="combo-best">
+        <div class="combo-best-head">
+          <span>Validation winner</span>
+          <span class="combo-best-name">${(d.best.combo || []).join(' · ')}</span>
+        </div>
+        <div class="combo-best-row test" style="color:var(--red)">test run failed: ${d.best.test_error}</div>
+      </div>`;
   }
 
   if (d.summary && d.summary.evaluated) {
     const s = d.summary;
     const note = $('combo-note');
     note.hidden = false;
+    const failedNote = Number(s.failed) > 0
+      ? ` ${s.failed} could not be scored.` : '';
     note.innerHTML = `<b>${s.beat_bh} / ${s.evaluated}</b> combos beat their own
-      buy &amp; hold; median excess <b>${comboPp(s.median_excess_pct)}</b>.
+      buy &amp; hold; median excess <b>${comboPp(s.median_excess_pct)}</b>.${failedNote}
       Keeping the best of ${s.evaluated} is a search — the test row is the
       honest estimate.`;
   }

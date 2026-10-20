@@ -1017,6 +1017,11 @@ honesty column — it says whether the return came from the fly or from beta.
   estimate.
 - `test_is_ticker_holdout` distinguishes the strong case (the basket contains
   none of the 12 training tickers) from a time-only holdout.
+- The pool is filtered to tickers with at least `window_size + 2 monthly
+  rebalances` rows in the validation window. AAPL's local file only covers
+  2022-2024, so it is dropped with a visible "skipped" notice rather than
+  crashing the search; a subset that still fails is kept as a skipped row
+  instead of aborting the other 100+ combos.
 
 A full run on the 10 holdout tickers (120 triples, 70 s):
 
