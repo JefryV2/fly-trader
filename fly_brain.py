@@ -1050,6 +1050,28 @@ class FlyBrainAgent(nn.Module):
             "mbon": round(to_mv(float(np.mean(V[mbon]))), 1),
         }
 
+    def get_region_peak_voltages(self, q: float = 99.0) -> dict:
+        """Membrane potential of the most-excited neurons in each region.
+
+        The *mean* V is dominated by silent cells sitting at a deeply negative
+        equilibrium (this connectome is inhibition-heavy), so mapping it to mV
+        pins every region at the -85mV clip and the oscilloscope carries no
+        signal. The 99th percentile tracks the cells actually approaching the
+        spike threshold, so it is what makes the trace informative.
+        """
+        V = self.simulator.V
+
+        def to_mv(v_val):
+            return float(np.clip(-70.0 + v_val * 45.0, -85.0, 30.0))
+
+        regions = (("al", self.simulator.IDX_AL),
+                   ("kc", self.simulator.IDX_KC),
+                   ("cx", self.simulator.IDX_CX),
+                   ("dan", self.simulator.IDX_DAN),
+                   ("mbon", self.simulator.IDX_MBON))
+        return {k: round(to_mv(float(np.percentile(V[ix], q))), 2)
+                for k, ix in regions}
+
     def make_smarter(self, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
         """
         Upgrade the fly's brain with real FlyWire v783 connectome weights.

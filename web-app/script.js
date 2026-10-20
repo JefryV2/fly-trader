@@ -48,13 +48,11 @@ const qDopaminePill = $('dopamine-pill');
 const qDopamineVal  = $('dopamine-val');
 const qBrainBadge   = $('brain-badge');
 
-// Deliberation probability bars
-const qProbHoldFill = $('prob-hold-fill');
-const qProbHoldText = $('prob-hold-text');
-const qProbBuyFill  = $('prob-buy-fill');
-const qProbBuyText  = $('prob-buy-text');
-const qProbSellFill = $('prob-sell-fill');
-const qProbSellText = $('prob-sell-text');
+// Live session (universe / budget / sizing) and portfolio-mode colours
+let sessionMode = 'single';
+const LIVE_PF_COLORS = ['#3d8eff', '#00e5ff', '#8c52ff', '#34d399', '#ffb703',
+                        '#f87171', '#f59e0b', '#a78bfa', '#22d3ee', '#4ade80'];
+const _pfColorMap = {};
 
 // Neuropil meters
 const qRateAL   = $('rate-al');
@@ -115,6 +113,10 @@ async function apiReset() {
     qDrawdown.textContent = '—';
     qWinrate.textContent  = '—';
     qStep.textContent     = '0';
+    // Reset also re-labels the counter: in a portfolio session the total is
+    // the number of monthly decisions, not the single-asset bar count.
+    const tbStep = $('tb-step');
+    if (tbStep) tbStep.textContent = `0 / ${d.total_steps || d.n_steps || 723}`;
     spikeData = new Array(N_NEURONS).fill(0);
     spikeData1024 = spikeData;
     currentDopamine       = 0.0;
@@ -169,6 +171,185 @@ async function apiStep(manualAction = -1) {
     setStatus('error', 'API Offline');
     return null;
   }
+}
+
+/* ─────────────────────────────────────────────
+   Universe / budget / sizing
+───────────────────────────────────────────── */
+function selectedTickers() {
+  return [...document.querySelectorAll('#ticker-chips .ticker-chip.on')]
+    .map(b => b.dataset.ticker);
+}
+
+function updateUniverseHint() {
+  const hint = $('uni-hint');
+  if (!hint) return;
+  const sel = selectedTickers();
+  hint.textContent = sel.length === 0 ? 'Pick at least one stock'
+    : sel.length === 1 ? `${sel[0]} · single-asset fly`
+    : `${sel.length} stocks · portfolio fly (monthly rebalance)`;
+}
+
+function syncBudgetChips() {
+  const v = String(Math.round(Number($('budget-input')?.value) || 0));
+  document.querySelectorAll('.budget-chip').forEach(c =>
+    c.classList.toggle('active', c.dataset.budget === v));
+}
+
+function applySessionMode(mode) {
+  sessionMode = mode === 'portfolio' ? 'portfolio' : 'single';
+  const single = $('delib-single');
+  const pf = $('delib-portfolio');
+  if (single) single.hidden = (sessionMode !== 'single');
+  if (pf) pf.hidden = (sessionMode !== 'portfolio');
+  // A basket is traded by the portfolio brain; the manual single-asset
+  // override and the per-asset policy chips do not apply.
+  document.querySelectorAll('.action-btn').forEach(b => {
+    b.disabled = sessionMode !== 'single';
+    b.style.opacity = sessionMode === 'single' ? '' : '.45';
+  });
+}
+
+function renderPortfolioAllocation(d) {
+  const stack = $('pf-delib-stack');
+  const legend = $('pf-delib-legend');
+  const dec = $('pf-delib-decision');
+  if (!stack || !legend) return;
+
+  const holdings = Array.isArray(d.holdings) ? d.holdings : [];
+  const cash = Number(d.cash_weight) || 0;
+  const parts = holdings.filter(h => h.weight > 0.0005)
+    .map(h => ({ ticker: h.ticker, weight: h.weight, cash: false }));
+  if (cash > 0.0005) parts.push({ ticker: 'Cash', weight: cash, cash: true });
+
+  parts.forEach(h => {
+    if (!_pfColorMap[h.ticker]) {
+      _pfColorMap[h.ticker] = h.cash
+        ? '#4b5b74'
+        : LIVE_PF_COLORS[Object.keys(_pfColorMap).length % LIVE_PF_COLORS.length];
+    }
+  });
+
+  stack.innerHTML = parts.map(h =>
+    `<div class="delib-seg" style="flex-grow:${h.weight};background:${_pfColorMap[h.ticker]}"></div>`
+  ).join('');
+
+  legend.innerHTML = parts.map(h =>
+    `<span class="dl-item"><i class="dl-dot" style="background:${_pfColorMap[h.ticker]}"></i>` +
+    `<span class="dl-name">${h.ticker}</span>` +
+    `<span class="dl-pct">${(h.weight * 100).toFixed(1)}%</span></span>`
+  ).join('');
+
+  const n = parts.filter(p => !p.cash).length;
+  if (dec) {
+    dec.textContent = `${n} held · ${(cash * 100).toFixed(1)}% cash`;
+    dec.className = 'delib-decision';
+  }
+}
+
+function applyConfigToUI(cfg) {
+  const s = cfg.session || {};
+  const active = new Set(s.tickers || []);
+  const chips = $('ticker-chips');
+  if (chips && !chips.childElementCount) {
+    chips.innerHTML = (cfg.available_tickers || [])
+      .map(t => `<button type="button" class="ticker-chip" data-ticker="${t}">${t}</button>`)
+      .join('');
+    chips.querySelectorAll('.ticker-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        btn.classList.toggle('on');
+        updateUniverseHint();
+      });
+    });
+  }
+  if (chips) {
+    chips.querySelectorAll('.ticker-chip').forEach(b =>
+      b.classList.toggle('on', active.has(b.dataset.ticker)));
+  }
+  const bi = $('budget-input');
+  if (bi && s.budget) bi.value = Math.round(s.budget);
+  const dt = $('dynamic-sizing-toggle');
+  if (dt) dt.checked = !!s.dynamic_sizing;
+
+  applySessionMode(s.mode || 'single');
+  updateUniverseHint();
+  syncBudgetChips();
+}
+
+async function fetchConfig() {
+  try {
+    const r = await fetch(`${API}/config`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    applyConfigToUI(d);
+    return d;
+  } catch {
+    return null;
+  }
+}
+
+async function applyUniverse() {
+  const btn = $('apply-universe-btn');
+  const status = $('uni-status');
+  const tickers = selectedTickers();
+  if (!tickers.length) {
+    status.textContent = 'Pick at least one stock first.';
+    status.className = 'uni-status err';
+    return;
+  }
+  const budget = Number($('budget-input')?.value) || 100000;
+  const dynamic = $('dynamic-sizing-toggle')?.checked ?? true;
+  const label = btn.textContent;
+
+  btn.disabled = true;
+  btn.textContent = 'Building…';
+  status.textContent = tickers.length > 1
+    ? `Building the portfolio env (reads ${tickers.length} CSVs)…`
+    : 'Building…';
+  status.className = 'uni-status';
+
+  try {
+    const r = await fetch(`${API}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers, budget, dynamic_sizing: dynamic })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    applyConfigToUI(d);
+    await apiReset();
+    status.textContent = d.session.mode === 'portfolio'
+      ? `Applied · ${d.session.tickers.length} stocks · ${d.n_steps} monthly rebalances`
+      : `Applied · ${d.session.tickers[0]} · ${d.n_steps} steps · $${Math.round(d.session.budget).toLocaleString('en-US')}`;
+    status.className = 'uni-status ok';
+    toast('Universe applied', '');
+  } catch (e) {
+    status.textContent = String(e.message || e);
+    status.className = 'uni-status err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function initUniverseControls() {
+  const chips = $('ticker-chips');
+  if (chips) {
+    chips.addEventListener('click', e => {
+      if (e.target.classList.contains('ticker-chip')) updateUniverseHint();
+    });
+  }
+  document.querySelectorAll('.budget-chip').forEach(c => {
+    c.addEventListener('click', () => {
+      const bi = $('budget-input');
+      if (bi) bi.value = c.dataset.budget;
+      syncBudgetChips();
+    });
+  });
+  const bi = $('budget-input');
+  if (bi) bi.addEventListener('input', syncBudgetChips);
+  const apply = $('apply-universe-btn');
+  if (apply) apply.addEventListener('click', applyUniverse);
 }
 
 async function apiTrainBatch() {
@@ -275,17 +456,20 @@ function handleStepResult(d) {
   const portfolio = typeof d.portfolio === 'number' && isFinite(d.portfolio) ? d.portfolio : 100000;
 
   // Update cards
+  applySessionMode(d.mode || 'single');
   updatePortfolioCard(portfolio, totalReturn, reward, d.action_idx);
   qSharpe.textContent   = sharpe;
   qDrawdown.textContent = drawdown + '%';
   qWinrate.textContent  = winrate + '%';
   qStep.textContent     = d.step;
 
+  if (d.mode === 'portfolio') renderPortfolioAllocation(d);
+
   // Topbar chips
   const tbSharpe   = $('tb-sharpe');   if (tbSharpe)   tbSharpe.textContent   = sharpe;
   const tbDrawdown = $('tb-drawdown'); if (tbDrawdown) tbDrawdown.textContent = drawdown + '%';
   const tbWinrate  = $('tb-winrate');  if (tbWinrate)  tbWinrate.textContent  = winrate + '%';
-  const tbStep     = $('tb-step');     if (tbStep)     tbStep.textContent     = `${d.step} / 723`;
+  const tbStep     = $('tb-step');     if (tbStep)     tbStep.textContent     = `${d.step} / ${d.n_steps || 723}`;
 
   // Stats tab mirrors
   const perfSharpe   = $('perf-sharpe');   if (perfSharpe)   perfSharpe.textContent   = sharpe;
@@ -295,19 +479,21 @@ function handleStepResult(d) {
   // Dopamine & Action Probabilities
   updateDopamineUI(currentDopamine);
   if (d.action_probs && d.action_probs.length === 7) {
-    updateDeliberationBars(d.action_probs, d.action_idx);
+    updateDeliberationBars(d.action_probs, d.action_idx, d);
   }
 
-  // Voltages (Vm) – accumulate for oscilloscope
+  // Voltages (Vm) – accumulate for oscilloscope. The trace uses the per-region
+  // peak (99th percentile) because the mean sits at the -85mV clip; the textual
+  // read-outs keep the mean.
   if (d.voltages) {
-    const vg = d.voltages;
+    const vg = d.voltages_peak || d.voltages;
     const push = (arr, val) => { arr.push(val); if (arr.length > 120) arr.shift(); };
     if (vg.al   !== undefined) push(voltageHistory.al,   vg.al);
     if (vg.kc   !== undefined) push(voltageHistory.kc,   vg.kc);
     if (vg.cx   !== undefined) push(voltageHistory.cx,   vg.cx);
     if (vg.dan  !== undefined) push(voltageHistory.dan,  vg.dan);
     if (vg.mbon !== undefined) push(voltageHistory.mbon, vg.mbon);
-    updateVmLabels(vg);
+    updateVmLabels(d.voltages);
   }
 
   // Neuropil rates
@@ -401,24 +587,46 @@ function updateDopamineUI(da) {
   }
 }
 
-function updateDeliberationBars(probs, activeAction) {
-  // Initialize all bar references
-  const bars = {
-    'bar-grp-hold': { fill: 'prob-hold-fill', text: 'prob-hold-text', active: 0 },
-    'bar-grp-buy25': { fill: 'prob-buy25-fill', text: 'prob-buy25-text', active: 1 },
-    'bar-grp-buy50': { fill: 'prob-buy50-fill', text: 'prob-buy50-text', active: 2 },
-    'bar-grp-buy100': { fill: 'prob-buy100-fill', text: 'prob-buy100-text', active: 3 },
-    'bar-grp-sell25': { fill: 'prob-sell25-fill', text: 'prob-sell25-text', active: 4 },
-    'bar-grp-sell50': { fill: 'prob-sell50-fill', text: 'prob-sell50-text', active: 5 },
-    'bar-grp-sell100': { fill: 'prob-sell100-fill', text: 'prob-sell100-text', active: 6 }
-  };
+function updateDeliberationBars(probs, activeAction, payload) {
+  const rows = [
+    ['hold',    'seg-hold',    'pct-hold',    'dl-hold'],
+    ['buy25',   'seg-buy25',   'pct-buy25',   'dl-buy25'],
+    ['buy50',   'seg-buy50',   'pct-buy50',   'dl-buy50'],
+    ['buy100',  'seg-buy100',  'pct-buy100',  'dl-buy100'],
+    ['sell25',  'seg-sell25',  'pct-sell25',  'dl-sell25'],
+    ['sell50',  'seg-sell50',  'pct-sell50',  'dl-sell50'],
+    ['sell100', 'seg-sell100', 'pct-sell100', 'dl-sell100'],
+  ];
 
-  // Update each bar
-  for (const [id, config] of Object.entries(bars)) {
-    const prob = probs[config.active];
-    $(config.fill).style.width = `${Math.round(prob * 100)}%`;
-    $(config.text).textContent = `${Math.round(prob * 100)}%`;
-    $(id).style.opacity = activeAction === config.active ? '1' : '0.65';
+  rows.forEach(([, segId, pctId, dlId], i) => {
+    const p = Math.max(0, Number(probs[i]) || 0);
+    const seg = $(segId);
+    const pct = $(pctId);
+    const dl  = $(dlId);
+    if (seg) seg.style.flexGrow = String(p);
+    if (pct) pct.textContent = p * 100 >= 1 ? `${Math.round(p * 100)}%` : `${(p * 100).toFixed(1)}%`;
+    if (dl)  dl.classList.toggle('is-active', activeAction === i);
+  });
+
+  const dec = $('delib-decision');
+  if (!dec) return;
+
+  const sizePct = payload && Number.isFinite(payload.size_pct) ? payload.size_pct : null;
+  const dynamic = !!(payload && payload.dynamic);
+
+  if (dynamic && sizePct !== null && activeAction >= 1 && activeAction <= 3) {
+    dec.textContent = `BUY ${sizePct.toFixed(1)}% of cash`;
+    dec.className = 'delib-decision buy';
+  } else if (dynamic && sizePct !== null && activeAction >= 4 && activeAction <= 6) {
+    dec.textContent = `SELL ${sizePct.toFixed(1)}% of position`;
+    dec.className = 'delib-decision sell';
+  } else if (payload && payload.action_label) {
+    dec.textContent = payload.action_label.toUpperCase();
+    dec.className = 'delib-decision' + (activeAction >= 1 && activeAction <= 3 ? ' buy'
+                                      : activeAction >= 4 ? ' sell' : '');
+  } else {
+    dec.textContent = 'HOLD';
+    dec.className = 'delib-decision';
   }
 }
 
@@ -464,68 +672,109 @@ function updatePortfolioCard(val, ret, reward, action) {
 
 /* ─────────────────────────────────────────────
    Oscilloscope (Membrane Potential Vm trace)
+   Drawn at devicePixelRatio for crispness, with a real mV scale and an
+   auto-range so five regions stay separable instead of collapsing into
+   one flat line near -70mV.
 ───────────────────────────────────────────── */
 function drawOscilloscope() {
   const canvas = $('oscilloscope-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
+
+  const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.width;
   const H = canvas.clientHeight || canvas.height;
-  canvas.width  = W;
-  canvas.height = H;
+  if (!W || !H) return;
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
 
-  // Draw per-region traces
   const traces = [
-    { arr: voltageHistory.al,   color: '#00e5ff', label: 'AL' },
-    { arr: voltageHistory.kc,   color: '#8c52ff', label: 'KC' },
-    { arr: voltageHistory.cx,   color: '#ffb703', label: 'CX' },
-    { arr: voltageHistory.dan,  color: '#ff3366', label: 'DAN' },
-    { arr: voltageHistory.mbon, color: '#00f59b', label: 'MBON' },
+    { key: 'al',   arr: voltageHistory.al,   color: '#00e5ff', label: 'AL' },
+    { key: 'kc',   arr: voltageHistory.kc,   color: '#8c52ff', label: 'KC' },
+    { key: 'cx',   arr: voltageHistory.cx,   color: '#ffb703', label: 'CX' },
+    { key: 'dan',  arr: voltageHistory.dan,  color: '#ff3366', label: 'DAN' },
+    { key: 'mbon', arr: voltageHistory.mbon, color: '#00f59b', label: 'MBON' },
   ];
 
-  const VM_MIN = -80, VM_MAX = -40;
-  const range = VM_MAX - VM_MIN;
+  // Auto-range over the live samples, with a floor on the span so a quiet
+  // stretch does not get amplified into noise.
+  let lo = Infinity, hi = -Infinity;
+  traces.forEach(({ arr }) => {
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (Number.isFinite(v) && v !== 0) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+  });
+  if (!Number.isFinite(lo)) { lo = -80; hi = -50; }
+  const span = Math.max(12, hi - lo);
+  const mid = (lo + hi) / 2;
+  lo = mid - span / 2 - 1.5;
+  hi = mid + span / 2 + 1.5;
 
-  // Background grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = (i / 4) * H;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  const padL = 30, padR = 4, padT = 4, padB = 2;
+  const plotW = Math.max(10, W - padL - padR);
+  const plotH = Math.max(10, H - padT - padB);
+  const yFor = v => padT + ((hi - v) / (hi - lo)) * plotH;
+
+  ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+
+  // Horizontal grid + mV labels.
+  for (let i = 0; i <= 3; i++) {
+    const v = hi - (i / 3) * (hi - lo);
+    const y = yFor(v);
+    ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(109,127,156,0.9)';
+    ctx.fillText(v.toFixed(0), padL - 4, y);
   }
 
-  // Threshold line at -55 mV
-  const threshY = H - (((-55) - VM_MIN) / range) * H;
-  ctx.strokeStyle = 'rgba(255, 183, 3, 0.4)';
-  ctx.setLineDash([3, 3]);
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, threshY); ctx.lineTo(W, threshY); ctx.stroke();
-  ctx.setLineDash([]);
+  // Spike threshold: the model fires when V > 0.7, which maps to -38.5 mV.
+  if (-38.5 <= hi && -38.5 >= lo) {
+    const y = yFor(-38.5);
+    ctx.strokeStyle = 'rgba(245,158,11,0.55)';
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
-  // Draw each trace
-  traces.forEach(({ arr, color }) => {
+  // Resting potential reference.
+  if (-70 <= hi && -70 >= lo) {
+    const y = yFor(-70);
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Traces.
+  traces.forEach(({ arr, color, key }) => {
+    const last = arr.length ? arr[arr.length - 1] : null;
+    const valEl = $(`osc-val-${key}`);
+    if (valEl) valEl.textContent = Number.isFinite(last) && last !== 0 ? `${last.toFixed(1)} mV` : '—';
     if (arr.length < 2) return;
-    ctx.beginPath();
-    arr.forEach((v, i) => {
-      const x = (i / (arr.length - 1)) * W;
-      const y = H - ((v - VM_MIN) / range) * H;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.4;
-    ctx.globalAlpha = 0.8;
-    ctx.stroke();
-    ctx.globalAlpha = 1.0;
-  });
 
-  // Resting potential label
-  const restY = H - ((-70 - VM_MIN) / range) * H;
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-  ctx.setLineDash([2, 5]);
-  ctx.beginPath(); ctx.moveTo(0, restY); ctx.lineTo(W, restY); ctx.stroke();
-  ctx.setLineDash([]);
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const x = padL + (i / (arr.length - 1)) * plotW;
+      const y = yFor(arr[i]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = 0.85;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 3;
+    ctx.stroke();
+    ctx.restore();
+  });
 }
 
 /* ─────────────────────────────────────────────
@@ -1664,9 +1913,11 @@ function appendTrade(trade) {
   const cls = rawCls.startsWith('buy') ? 'buy' : rawCls.startsWith('sell') ? 'sell' : 'hold';
   const div = document.createElement('div');
   div.className = `trade-item ${cls}`;
+  const px = (trade.price === null || trade.price === undefined || trade.price === 0)
+    ? '' : `<span class="tp">$${trade.price}</span>`;
   div.innerHTML = `
     <span class="ta ${cls}">${trade.action}</span>
-    <span class="tp">$${trade.price}</span>
+    ${px}
     <span class="tp">→ $${trade.portfolio.toLocaleString('en-US')}</span>
   `;
   qTradeLog.prepend(div);
@@ -2370,6 +2621,8 @@ async function boot() {
     }
   } catch {}
   initThree();
+  initUniverseControls();
+  await fetchConfig();
   await apiReset();
   updateNeuronCountDisplay();
 // Initialize simulations button state

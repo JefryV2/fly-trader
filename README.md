@@ -143,6 +143,20 @@ python -m pip install -r requirements.txt
    *Adaptive breadth* below. Portfolio mode is configured by environment
    variables (`FLYBRAIN_PORTFOLIO_CKPT`, `…_PLAN`, `…_SPLIT`, `…_TICKERS`,
    `…_GATE`, `…_MIN_K`, `…_MAX_K`).
+   The **Universe & Budget** card picks any 1–54 stocks and a starting budget at
+   runtime (`POST /config`): one ticker runs the single‑asset fly, two or more
+   switch the same session to the portfolio fly (monthly rebalance). All live
+   episodes are normalised to 2022‑01‑03 → 2024‑12‑31 so changing tickers never
+   changes the test window.
+   **Continuous sizing** (on by default) turns the policy's own 7‑way
+   distribution into an expected size — `p₁·25% + p₂·50% + p₃·100%` for buys
+   (fraction of cash) or sells (fraction of the position) — so any value from 0
+   to 100% is reachable; a one‑hot policy reproduces the discrete 25/50/100
+   ladder exactly. This is an execution rule applied *after* the learned action:
+   the headline backtest numbers above were measured with the discrete ladder.
+   The oscilloscope plots each region's **p99 peak** membrane potential rather
+   than the mean, because the mean sits at the −85 mV clip and hides all
+   spiking; the marked threshold is −38.5 mV, the model's own `V > 0.7`.
 
 ## How evaluation works (and why it changed)
 Previously the model was trained and evaluated on the **same** data, so headline

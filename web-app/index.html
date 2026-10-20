@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <link rel="stylesheet" href="/static/style.css?v=16" />
 </head>
 <body>
 
@@ -96,6 +96,29 @@
           <div class="metric-label">Step</div>
           <div class="metric-num" id="step-val">0</div>
         </div>
+      </div>
+
+      <!-- Universe & budget -->
+      <div class="card" id="universe-card">
+        <div class="card-label">Universe &amp; Budget</div>
+        <div class="ticker-chips" id="ticker-chips"></div>
+        <div class="uni-hint" id="uni-hint">1 stock = single-asset fly · 2+ = portfolio fly</div>
+        <div class="uni-row">
+          <span class="uni-lab">Budget</span>
+          <div class="budget-wrap"><span>$</span><input id="budget-input" type="number" min="100" step="1000" value="100000" /></div>
+        </div>
+        <div class="budget-chips">
+          <button type="button" class="budget-chip" data-budget="10000">10k</button>
+          <button type="button" class="budget-chip active" data-budget="100000">100k</button>
+          <button type="button" class="budget-chip" data-budget="1000000">1M</button>
+        </div>
+        <label class="switch-row uni-switch" title="The fly sizes each trade from its own action distribution, so any 0-100% is possible.">
+          <input type="checkbox" id="dynamic-sizing-toggle" checked />
+          <span class="switch-slider"></span>
+          <span>Continuous sizing (0–100%)</span>
+        </label>
+        <button type="button" class="apply-btn" id="apply-universe-btn">Apply Universe</button>
+        <div class="uni-status" id="uni-status"></div>
       </div>
 
       <!-- Controls card -->
@@ -222,59 +245,53 @@
           <canvas id="brain-canvas"></canvas>
           <div class="oscilloscope-tray" id="oscilloscope-tray">
             <div class="osc-header">
-              <span class="osc-title">Membrane Potential Vm Oscilloscope</span>
-              <span class="osc-threshold">— -55 mV threshold</span>
+              <span class="osc-title">Membrane Potential Vm · region peak (p99)</span>
+              <span class="osc-threshold">— −38.5 mV spike threshold</span>
             </div>
-            <canvas id="oscilloscope-canvas" width="800" height="36"></canvas>
+            <canvas id="oscilloscope-canvas" width="800" height="92"></canvas>
             <div class="osc-legend">
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00e5ff"></div>AL</div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#8c52ff"></div>KC</div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ffb703"></div>CX</div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ff3366"></div>DAN</div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00f59b"></div>MBON</div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00e5ff"></div>AL<span class="osc-leg-val" id="osc-val-al">—</span></div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#8c52ff"></div>KC<span class="osc-leg-val" id="osc-val-kc">—</span></div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ffb703"></div>CX<span class="osc-leg-val" id="osc-val-cx">—</span></div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#ff3366"></div>DAN<span class="osc-leg-val" id="osc-val-dan">—</span></div>
+              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:#00f59b"></div>MBON<span class="osc-leg-val" id="osc-val-mbon">—</span></div>
             </div>
           </div>
         </div>
 
         <!-- MBON action valence bars -->
         <div class="deliberation-box">
-          <div class="delib-label">MBON Valence (Action Probabilities):</div>
-          <div class="delib-bars">
-            <div class="d-bar-group" id="bar-grp-hold">
-              <span class="d-name">HOLD</span>
-              <div class="d-bar-bg"><div class="d-bar-fill hold" id="prob-hold-fill" style="width:14%"></div></div>
-              <span class="d-pct" id="prob-hold-text">14%</span>
+          <div id="delib-single">
+            <div class="delib-head">
+              <span class="delib-label">MBON Valence · Action Probabilities</span>
+              <span class="delib-decision" id="delib-decision">—</span>
             </div>
-            <div class="d-bar-group" id="bar-grp-buy25">
-              <span class="d-name">BUY 25%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy25-fill" style="width:16%"></div></div>
-              <span class="d-pct" id="prob-buy25-text">16%</span>
+            <div class="delib-stack">
+              <div class="delib-seg hold" id="seg-hold"></div>
+              <div class="delib-seg buy b1" id="seg-buy25"></div>
+              <div class="delib-seg buy b2" id="seg-buy50"></div>
+              <div class="delib-seg buy b3" id="seg-buy100"></div>
+              <div class="delib-seg sell s1" id="seg-sell25"></div>
+              <div class="delib-seg sell s2" id="seg-sell50"></div>
+              <div class="delib-seg sell s3" id="seg-sell100"></div>
             </div>
-            <div class="d-bar-group" id="bar-grp-buy50">
-              <span class="d-name">BUY 50%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy50-fill" style="width:17%"></div></div>
-              <span class="d-pct" id="prob-buy50-text">17%</span>
+            <div class="delib-legend">
+              <span class="dl-item" id="dl-hold"><i class="dl-dot hold"></i>Hold<span class="dl-pct" id="pct-hold">0%</span></span>
+              <span class="dl-item" id="dl-buy25"><i class="dl-dot b1"></i>B25<span class="dl-pct" id="pct-buy25">0%</span></span>
+              <span class="dl-item" id="dl-buy50"><i class="dl-dot b2"></i>B50<span class="dl-pct" id="pct-buy50">0%</span></span>
+              <span class="dl-item" id="dl-buy100"><i class="dl-dot b3"></i>B100<span class="dl-pct" id="pct-buy100">0%</span></span>
+              <span class="dl-item" id="dl-sell25"><i class="dl-dot s1"></i>S25<span class="dl-pct" id="pct-sell25">0%</span></span>
+              <span class="dl-item" id="dl-sell50"><i class="dl-dot s2"></i>S50<span class="dl-pct" id="pct-sell50">0%</span></span>
+              <span class="dl-item" id="dl-sell100"><i class="dl-dot s3"></i>S100<span class="dl-pct" id="pct-sell100">0%</span></span>
             </div>
-            <div class="d-bar-group" id="bar-grp-buy100">
-              <span class="d-name">BUY 100%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill buy" id="prob-buy100-fill" style="width:15%"></div></div>
-              <span class="d-pct" id="prob-buy100-text">15%</span>
+          </div>
+          <div id="delib-portfolio" hidden>
+            <div class="delib-head">
+              <span class="delib-label">Portfolio Allocation · Monthly Rebalance</span>
+              <span class="delib-decision" id="pf-delib-decision">—</span>
             </div>
-            <div class="d-bar-group" id="bar-grp-sell25">
-              <span class="d-name">SELL 25%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell25-fill" style="width:14%"></div></div>
-              <span class="d-pct" id="prob-sell25-text">14%</span>
-            </div>
-            <div class="d-bar-group" id="bar-grp-sell50">
-              <span class="d-name">SELL 50%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell50-fill" style="width:14%"></div></div>
-              <span class="d-pct" id="prob-sell50-text">14%</span>
-            </div>
-            <div class="d-bar-group" id="bar-grp-sell100">
-              <span class="d-name">SELL 100%</span>
-              <div class="d-bar-bg"><div class="d-bar-fill sell" id="prob-sell100-fill" style="width:10%"></div></div>
-              <span class="d-pct" id="prob-sell100-text">10%</span>
-            </div>
+            <div class="delib-stack" id="pf-delib-stack"></div>
+            <div class="delib-legend pf" id="pf-delib-legend"></div>
           </div>
         </div>
 
@@ -668,6 +685,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=10"></script>
+  <script src="/static/script.js?v=16"></script>
 </body>
 </html>

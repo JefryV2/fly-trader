@@ -325,17 +325,28 @@ class FlyTradeEnv(gym.Env):
         obs = self._get_observation(self.current_step)
         return obs, {}
 
-    def _apply_action(self, action: int, price: float, confidence: float = 1.0):
-        """Execute fractional trade based on action (0-6) and confidence (0-1)."""
+    def _apply_action(self, action: int, price: float, confidence: float = 1.0,
+                      size_override: float = None):
+        """Execute fractional trade based on action (0-6) and confidence (0-1).
+
+        ``size_override`` bypasses the discretised fraction entirely and trades
+        exactly that proportion of cash (buy) or shares (sell). The live server
+        uses it to turn the policy's 7-way distribution into a continuous
+        position size -- see web-app/server.py:_continuous_size().
+        """
         if self.cash > 0 and action >= 1 and action <= 3:
-            fraction = self.BUY_FRACTIONS[action] * confidence
+            fraction = (size_override if size_override is not None
+                        else self.BUY_FRACTIONS[action] * confidence)
+            fraction = float(np.clip(fraction, 0.0, 1.0))
             amount = self.cash * fraction
             if amount > 0:
                 self.shares += amount / price
                 self.cash -= amount
                 self.cash -= amount * self.transaction_cost
         elif self.shares > 0 and action >= 4:
-            fraction = self.SELL_FRACTIONS[action]
+            fraction = (size_override if size_override is not None
+                        else self.SELL_FRACTIONS[action])
+            fraction = float(np.clip(fraction, 0.0, 1.0))
             amount = self.shares * fraction
             if amount > 0:
                 self.cash += amount * price
@@ -346,7 +357,7 @@ class FlyTradeEnv(gym.Env):
                 self.entry_price = 0.0
                 self.highest_price = 0.0
 
-    def step(self, action: int, confidence: float = 1.0):
+    def step(self, action: int, confidence: float = 1.0, size_override: float = None):
         if self.current_step >= self.n_steps:
             idx = len(self.data) - 1
             price = float(self.data.iloc[idx]["Close"])
@@ -358,7 +369,11 @@ class FlyTradeEnv(gym.Env):
         price = float(self.data.iloc[idx]["Close"])
         
         if self.cash > 0 and action >= 1 and action <= 3:
-            fraction = self.BUY_FRACTIONS[action] * confidence
+            # size_override lets the caller trade an arbitrary fraction of cash
+            # instead of the discretised 25/50/100% bucket.
+            fraction = (size_override if size_override is not None
+                        else self.BUY_FRACTIONS[action] * confidence)
+            fraction = float(np.clip(fraction, 0.0, 1.0))
             max_amount = self.cash / (1 + self.transaction_cost)  # Account for transaction cost
             amount = self.cash * fraction
             if amount > max_amount:
@@ -367,7 +382,9 @@ class FlyTradeEnv(gym.Env):
                 self.shares += amount / price
                 self.cash -= amount * (1 + self.transaction_cost)
         elif self.shares > 0 and action >= 4:
-            fraction = self.SELL_FRACTIONS[action]
+            fraction = (size_override if size_override is not None
+                        else self.SELL_FRACTIONS[action])
+            fraction = float(np.clip(fraction, 0.0, 1.0))
             amount = self.shares * fraction
             if amount > 0:
                 sell_value = amount * price

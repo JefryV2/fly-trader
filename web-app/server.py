@@ -112,9 +112,31 @@ app.add_middleware(
 
 # ── Global State ───────────────────────────────────────────────────────────
 DATA_PATH = Path(__file__).parent.parent / "data" / "AAPL_daily.csv"
-MULTI_ASSET_TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT"]
+DATA_DIR = DATA_PATH.parent
 if not DATA_PATH.is_file():
     raise RuntimeError(f"Missing {DATA_PATH}. Run: python data_fetch.py AAPL")
+
+# Every ticker the dashboard can trade. This is the raw data/ inventory; a
+# multi-stock session additionally needs one *shared* trading calendar, which is
+# validated when the session is built.
+AVAILABLE_TICKERS = sorted(
+    p.name[: -len("_daily.csv")] for p in DATA_DIR.glob("*_daily.csv")
+)
+
+# Live session: what is being traded, with what starting budget, and whether the
+# fly chooses a continuous position size instead of the 25/50/100 buckets.
+SESSION = {
+    "tickers": ["AAPL"],
+    "budget": 100000.0,
+    "dynamic_sizing": os.environ.get(
+        "FLYBRAIN_DYNAMIC_SIZING", "true").lower() == "true",
+}
+
+# Every live episode covers the same three years, whatever the ticker or basket,
+# so switching universe never silently changes the test period (the raw CSVs
+# range from 2022-2024 for AAPL to 2015-2025 for most others).
+LIVE_WINDOW_START = "2022-01-03"
+LIVE_WINDOW_END = "2024-12-31"
 
 # Objective used by the server's environment(s). "excess" (agent return minus a
 # passive buy & hold benchmark) matches how the shipped checkpoint is trained.
@@ -148,9 +170,23 @@ REGIME_VOL20_IDX = -2
 # Portfolio block: [exposure_frac, cash_frac, unrealised_pnl_frac, steps/30].
 PORTFOLIO_EXPOSURE_IDX = -8
 
-env   = FlyTradeEnv(DATA_PATH, window_size=30, enable_sl_tp=False,
-                    reward_mode=SERVER_REWARD_MODE,
-                    indicator_norm=SERVER_INDICATOR_NORM)
+def _single_env(ticker: str, budget: float = 100000.0):
+    """Build a single-asset live env.
+
+    Every ticker goes through the same feature pipeline, so the served brain and
+    its observation width transfer unchanged when the universe is switched.
+    """
+    path = DATA_DIR / f"{ticker.upper()}_daily.csv"
+    if not path.is_file():
+        raise ValueError(f"Unknown ticker {ticker!r}")
+    return FlyTradeEnv(path, window_size=30, enable_sl_tp=False,
+                       initial_cash=float(budget),
+                       start_date=LIVE_WINDOW_START, end_date=LIVE_WINDOW_END,
+                       reward_mode=SERVER_REWARD_MODE,
+                       indicator_norm=SERVER_INDICATOR_NORM)
+
+
+env = _single_env(SESSION["tickers"][0], SESSION["budget"])
 
 CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain.pt"
 BEST_CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain_best.pt"
@@ -495,6 +531,180 @@ def _get_region_breakdown(spikes_1024, N_NEURONS=1024):
         "spike_rate_pct": round(total_spikes / N_NEURONS * 100, 1),
     }
 
+def _continuous_size(probs, action: int) -> float:
+    """Turn the 7-way action distribution into a continuous commitment.
+
+    ``probs`` is the (masked) categorical distribution over
+    {hold, buy 25/50/100, sell 25/50/100}. Its *expected* buy magnitude
+    ``p1*0.25 + p2*0.50 + p3*1.00`` is a number in [0, 1] -- so a policy that is
+    90% sure of a small nibble can commit 3.6% of cash instead of being snapped
+    to 25%. Sells use the same expectation over the position. Returns 0.0 for
+    hold or an out-of-range action.
+    """
+    p = np.asarray(probs, dtype=np.float64)
+    if p.size != 7:
+        return 0.0
+    if 1 <= action <= 3:
+        return float(np.clip(p[1] * 0.25 + p[2] * 0.50 + p[3] * 1.00, 0.0, 1.0))
+    if 4 <= action <= 6:
+        return float(np.clip(p[4] * 0.25 + p[5] * 0.50 + p[6] * 1.00, 0.0, 1.0))
+    return 0.0
+
+
+# ── Live portfolio session ─────────────────────────────────────────────────
+# Two assets or more switches the dashboard to the multi-asset brain: a separate
+# checkpoint trained on a cross-section (README, "Adaptive breadth"). It
+# rebalances monthly over the same 2022-2024 window as the single-asset demo so
+# both modes have a comparable number of decisions.
+LIVE_PORTFOLIO_START = LIVE_WINDOW_START
+LIVE_PORTFOLIO_END = LIVE_WINDOW_END
+ACTION_LABELS = ["Hold", "Buy 25%", "Buy 50%", "Buy 100%",
+                 "Sell 25%", "Sell 50%", "Sell 100%"]
+
+_pf_live = {"env": None, "agent": None, "key": None, "history": [], "trades": []}
+
+
+def _portfolio_live_env(tickers):
+    from portfolio_env import PortfolioEnv
+    kw = dict(start_date=LIVE_PORTFOLIO_START, end_date=LIVE_PORTFOLIO_END,
+              rebalance_every=PORTFOLIO_REBALANCE,
+              alloc_min_k=PORTFOLIO_MIN_K, alloc_max_k=PORTFOLIO_MAX_K)
+    if PORTFOLIO_GATE == "topk":
+        kw["alloc_gate"] = "topk"
+        kw["alloc_topk"] = PORTFOLIO_MIN_K
+    elif PORTFOLIO_GATE != "none":
+        kw["alloc_gate"] = PORTFOLIO_GATE
+    return PortfolioEnv(list(tickers), **kw)
+
+
+def _live_portfolio():
+    """The live (env, agent) for the current universe, rebuilt when it changes."""
+    global _pf_live
+    tickers = [t.upper() for t in SESSION["tickers"]]
+    key = tuple(tickers)
+    if _pf_live["env"] is None or _pf_live["key"] != key:
+        p_env = _portfolio_live_env(tickers)
+        p_agent = _get_portfolio_agent(p_env)
+        p_env.reset()
+        _pf_live = {"env": p_env, "agent": p_agent, "key": key,
+                    "history": [1.0], "trades": []}
+    return _pf_live["env"], _pf_live["agent"]
+
+
+def _reset_live_portfolio():
+    global _pf_live
+    if _pf_live["env"] is not None:
+        _pf_live["env"].reset()
+        _pf_live["history"] = [1.0]
+        _pf_live["trades"] = []
+
+
+def _run_portfolio_step():
+    """One monthly rebalance of the multi-asset fly."""
+    global _pf_live
+    p_env, p_agent = _live_portfolio()
+    if p_env.step_i >= p_env.n_steps:
+        p_env.reset()
+        _pf_live["history"] = [1.0]
+        _pf_live["trades"] = []
+
+    obs = p_env.observe()
+    actions, probs, _values = p_agent.select_actions_batch(obs, deterministic=True)
+    actions = np.asarray(actions, dtype=int)
+    _next, rewards, done, info = p_env.step(actions)
+
+    value = float(info["value"])
+    _pf_live["history"].append(value)
+
+    budget = float(SESSION["budget"])
+    pv = budget * value
+    hist_pv = [budget * h for h in _pf_live["history"]]
+    dec_step = len(hist_pv) - 1
+    total_decisions = int(np.ceil(p_env.n_steps / max(1, p_env.rebalance_every)))
+
+    weights = [float(w) for w in info["weights"]]
+    cash_w = float(info["cash"])
+    holdings = []
+    for a, t in enumerate(p_env.tickers):
+        act = int(actions[a])
+        holdings.append({
+            "ticker": t,
+            "weight": round(weights[a], 4),
+            "action": ACTION_LABELS[act],
+            "action_idx": act,
+            "probs": [round(float(p), 4) for p in probs[a]],
+        })
+    holdings.sort(key=lambda h: h["weight"], reverse=True)
+    held = [h for h in holdings if h["weight"] > 1e-6]
+
+    if held:
+        _pf_live["trades"].append({
+            "step":      dec_step,
+            "action":    " · ".join(f"{h['ticker']} {h['weight']*100:.0f}%" for h in held),
+            "price":     None,
+            "portfolio": round(pv, 2),
+        })
+
+    h = np.asarray(hist_pv, dtype=np.float64)
+    total_return = (h[-1] / budget - 1.0) * 100.0 if budget > 0 else 0.0
+    peak = np.maximum.accumulate(h)
+    drawdown = float(((peak - h) / (peak + 1e-9)).max() * 100.0) if h.size else 0.0
+    wins = sum(1 for i in range(1, len(h)) if h[i] > h[i - 1])
+    win_rate = wins / max(1, len(h) - 1) * 100.0
+    sharpe = _compute_sharpe(hist_pv)
+
+    spikes_1024 = np.asarray(p_agent.simulator.last_spikes, dtype=np.float32).flatten()
+    if spikes_1024.size < p_agent.N_NEURONS:
+        spikes_1024 = np.pad(spikes_1024, (0, p_agent.N_NEURONS - spikes_1024.size))
+    spikes_1024 = spikes_1024[: p_agent.N_NEURONS]
+    spikes_list = [int(v > 0) for v in spikes_1024]
+
+    summary = (f"{len(held)} held" if held else "All cash")
+
+    return {
+        "step":           dec_step,
+        "n_steps":        total_decisions,
+        "bar":            int(p_env.step_i),
+        "action":         summary,
+        "action_idx":     0,
+        "action_label":   summary,
+        "action_probs":   [0.0] * 7,
+        "size_pct":       None,
+        "dynamic":        True,
+        "mode":           "portfolio",
+        "ticker":         None,
+        "tickers":        list(p_env.tickers),
+        "budget":         budget,
+        "holdings":       holdings,
+        "cash_weight":    round(cash_w, 4),
+        "breadth":        len(held),
+        "strategy":       "portfolio-fly",
+        "reward":         round(float(info["portfolio_return"]), 6),
+        "dopamine":       round(_safe_float(p_agent.simulator.dopamine_level), 4),
+        "loss":           0.0,
+        "done":           bool(done),
+        "portfolio":      round(pv, 2),
+        "total_return":   _safe_float(total_return),
+        "sharpe":         _safe_float(sharpe),
+        "drawdown":       _safe_float(drawdown),
+        "win_rate":       _safe_float(win_rate),
+        "regions":        _get_region_breakdown(spikes_1024, p_agent.N_NEURONS),
+        "voltages":       p_agent.get_region_voltages(),
+        "voltages_peak":  p_agent.get_region_peak_voltages(),
+        "spikes_sample":  spikes_list[:256],
+        "spikes_full":    spikes_list,
+        "history":        [round(_safe_float(v), 2) for v in hist_pv[-200:]],
+        "trades":         _pf_live["trades"][-20:],
+    }
+
+
+def _dispatch_step(action: int, auto_brain: bool = False,
+                   enable_learning: bool = True):
+    if len(SESSION["tickers"]) > 1:
+        return _run_portfolio_step()
+    return _run_step(action, auto_brain=auto_brain, enable_learning=enable_learning)
+
+
 def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = True):
     global obs, _history, _trades, _last_shaped_reward, _best_score, _patience_counter, _reward_mean, _reward_std, _reward_count
 
@@ -582,8 +792,27 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
     # Ensure 1D array of 1024 elements
     spikes_1024 = np.asarray(spikes_1024).flatten()
 
+    # ── Continuous position sizing ─────────────────────────────────────────
+    # The policy is categorical over seven buckets, but its *expected*
+    # commitment is continuous: sum(p_buy * size) over the three buy buckets is
+    # any value in [0, 1]. Trading that instead of the argmax bucket is what
+    # lets the fly buy 3.6% (or sell 11.2%) rather than being snapped to 25%,
+    # 50% or 100%. It is the fly's own distribution, not a hand-written rule.
+    size_override = None
+    size_pct = None
+    if SESSION["dynamic_sizing"] and auto_brain and 1 <= action <= 6:
+        size_override = _continuous_size(action_probs, action)
+        size_pct = round(size_override * 100.0, 2)
+        if size_override <= 5e-4:
+            # Expected commitment rounds to nothing -- log a hold rather than a
+            # zero-share trade.
+            size_override = None
+            size_pct = None
+            action = 0
+
     # Step the environment with adaptive confidence
-    next_obs, reward, done, _, info = env.step(action, confidence=confidence)
+    next_obs, reward, done, _, info = env.step(
+        action, confidence=confidence, size_override=size_override)
 
     pv = _safe_float(info.get("portfolio_value", env.initial_cash), env.initial_cash)
     _history.append(pv)
@@ -615,10 +844,13 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
     obs = next_obs
 
     labels = ["Hold", "Buy 25%", "Buy 50%", "Buy 100%", "Sell 25%", "Sell 50%", "Sell 100%"]
+    label = labels[action]
+    if size_pct is not None and action != 0:
+        label = f"{'Buy' if action <= 3 else 'Sell'} {size_pct:.1f}%"
     if action != 0:
         _trades.append({
             "step":      env.current_step,
-            "action":    labels[action],
+            "action":    label,
             "price":     round(price, 2),
             "portfolio": round(pv, 2),
         })
@@ -640,8 +872,16 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
 
     return {
         "step":           env.current_step,
-        "action":         labels[action],
+        "action":         label,
         "action_idx":     action,
+        "action_label":   label,
+        "size_pct":       size_pct,
+        "dynamic":        bool(SESSION["dynamic_sizing"]),
+        "mode":           "single",
+        "ticker":         SESSION["tickers"][0],
+        "tickers":        list(SESSION["tickers"]),
+        "budget":         float(env.initial_cash),
+        "n_steps":        int(env.n_steps),
         "strategy":       SERVER_STRATEGY,
         "action_probs":   [round(_safe_float(p), 4) for p in action_probs],
         "reward":         clean_reward,
@@ -655,6 +895,7 @@ def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = Tru
         "win_rate":       _safe_float(win_rate),
         "regions":        regions,
         "voltages":       voltages,
+        "voltages_peak":  brain.get_region_peak_voltages(),
         "spikes_sample":  spikes_list[:256],      # Top 256 for 3D visualizer
         "spikes_full":    spikes_list,            # Full 1024 binary spikes
         "history":        [round(_safe_float(v), 2) for v in _history[-200:]],
@@ -669,6 +910,14 @@ def ping():
 @app.get("/reset")
 def reset():
     global obs, _history, _trades, _last_shaped_reward, _patience_counter, _reward_mean, _reward_std, _reward_count
+    if len(SESSION["tickers"]) > 1:
+        _reset_live_portfolio()
+        p_env, _ = _live_portfolio()
+        return {
+            "message":     "Portfolio episode reset",
+            "portfolio":   SESSION["budget"],
+            "total_steps": int(np.ceil(p_env.n_steps / max(1, p_env.rebalance_every))),
+        }
     obs, _ = env.reset()
     brain.reset()
     _history = [env.initial_cash]
@@ -692,7 +941,109 @@ class ActionPayload(BaseModel):
 @app.post("/step")
 def take_step(payload: ActionPayload):
     auto_brain = (payload.action == -1)
-    return _run_step(payload.action, auto_brain=auto_brain, enable_learning=payload.learning)
+    return _dispatch_step(payload.action, auto_brain=auto_brain,
+                          enable_learning=payload.learning)
+
+
+# ── Session config: universe, budget, sizing mode ──────────────────────────
+class SessionPayload(BaseModel):
+    tickers: list[str] | None = None
+    budget: float | None = None
+    dynamic_sizing: bool | None = None
+
+
+def _session_summary() -> dict:
+    mode = "portfolio" if len(SESSION["tickers"]) > 1 else "single"
+    out = {
+        "session": {
+            "tickers": list(SESSION["tickers"]),
+            "budget": float(SESSION["budget"]),
+            "dynamic_sizing": bool(SESSION["dynamic_sizing"]),
+            "mode": mode,
+        },
+        "available_tickers": AVAILABLE_TICKERS,
+    }
+    if mode == "portfolio":
+        p_env, _ = _live_portfolio()
+        out["n_steps"] = int(np.ceil(p_env.n_steps / max(1, p_env.rebalance_every)))
+        out["step"] = int(p_env.step_i // max(1, p_env.rebalance_every))
+        out["n_bars"] = int(p_env.n_steps)
+        out["rebalance_every"] = int(p_env.rebalance_every)
+        out["gate"] = {"mode": PORTFOLIO_GATE, "min_k": PORTFOLIO_MIN_K,
+                       "max_k": PORTFOLIO_MAX_K}
+        out["window"] = [LIVE_PORTFOLIO_START, LIVE_PORTFOLIO_END]
+    else:
+        out["n_steps"] = int(env.n_steps)
+        out["step"] = int(env.current_step)
+    return out
+
+
+@app.get("/config")
+def get_config():
+    return _session_summary()
+
+
+@app.post("/config")
+def set_config(payload: SessionPayload):
+    """Switch universe / budget / sizing mode, then reset the affected episode."""
+    global env, obs, _history, _trades, _last_shaped_reward
+
+    tickers = list(SESSION["tickers"])
+    budget = float(SESSION["budget"])
+    dynamic = bool(SESSION["dynamic_sizing"])
+
+    if payload.tickers is not None:
+        picked = []
+        for t in payload.tickers:
+            t = str(t).strip().upper()
+            if not t:
+                continue
+            if t not in AVAILABLE_TICKERS:
+                raise HTTPException(400, f"Unknown ticker {t!r}")
+            if t not in picked:
+                picked.append(t)
+        if not picked:
+            raise HTTPException(400, "Pick at least one ticker")
+        tickers = picked
+
+    if payload.budget is not None:
+        b = float(payload.budget)
+        if not (b > 0) or not math.isfinite(b):
+            raise HTTPException(400, "Budget must be a positive number")
+        budget = b
+
+    if payload.dynamic_sizing is not None:
+        dynamic = bool(payload.dynamic_sizing)
+
+    if len(tickers) > 1 and not PORTFOLIO_CKPT.is_file():
+        raise HTTPException(
+            400, f"Portfolio checkpoint missing ({PORTFOLIO_CKPT.name}); "
+                 "train it with the recipe in README, or pick one ticker.")
+
+    prev = dict(SESSION)
+    new_env = None
+    try:
+        SESSION["tickers"], SESSION["budget"], SESSION["dynamic_sizing"] = \
+            tickers, budget, dynamic
+        if len(tickers) > 1:
+            _reset_live_portfolio()
+            _live_portfolio()
+        else:
+            new_env = _single_env(tickers[0], budget)
+    except (SystemExit, Exception) as exc:
+        SESSION.clear()
+        SESSION.update(prev)
+        raise HTTPException(400, f"Could not build that session: {exc}")
+
+    if new_env is not None:
+        env = new_env
+        obs, _ = env.reset()
+        brain.reset()
+        _history = [env.initial_cash]
+        _trades.clear()
+        _last_shaped_reward = 0.0
+
+    return _session_summary()
 
 class TrainBatchPayload(BaseModel):
     episodes: int = 25
