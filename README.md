@@ -171,7 +171,10 @@ The API follows the same rule:
 - `POST /train_batch {"episodes": N, "split": "train"}` trains on the train split
   and returns `median_return_pct` (not just the cherry‑picked `best_return_pct`)
   plus a `heldout` block with per‑ticker fly vs buy‑&‑hold results on the test
-  split. Each episode records its `ticker` and date range.
+  split. Each episode records its `ticker` and date range. Episodes cycle the
+  12 training names (`MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG`); the
+  `heldout` block evaluates the 10 unseen names
+  (`NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN`), which are never trained on.
 - `POST /eval_episode {"ticker": ..., "split": "test"}` is split‑aware and
   returns `buy_hold_return_pct` and `excess_vs_buyhold_pct` for context.
 

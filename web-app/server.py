@@ -126,6 +126,22 @@ AVAILABLE_TICKERS = sorted(
     p.name[: -len("_daily.csv")] for p in DATA_DIR.glob("*_daily.csv")
 )
 
+# The live single-asset trainer cycles through the same 12 training names the
+# portfolio recipe uses. The 10-name holdout set is never trained on; it is
+# only reported as out-of-sample evidence at the end of a training run. Both
+# lists are env-overridable so the dashboard and the scripts agree on one
+# universe (see COMBO_TRAIN_TICKERS / PORTFOLIO_UNIVERSE).
+MULTI_ASSET_TICKERS = [
+    t.strip().upper() for t in os.environ.get(
+        "FLYBRAIN_PORTFOLIO_TRAIN_TICKERS",
+        "MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG").split(",") if t.strip()
+]
+HELDOUT_TICKERS = [
+    t.strip().upper() for t in os.environ.get(
+        "FLYBRAIN_PORTFOLIO_TICKERS",
+        "NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN").split(",") if t.strip()
+]
+
 # Live session: what is being traded, with what starting budget, and whether the
 # fly chooses a continuous position size instead of the 25/50/100 buckets.
 SESSION = {
@@ -1240,7 +1256,7 @@ def train_batch(payload: TrainBatchPayload):
     # Out-of-sample evaluation on the held-out split (never trained on).
     # This is the honest number: it is NOT the max over stochastic in-sample
     # episodes, and it is measured over the same window for every ticker.
-    heldout = _heldout_report(MULTI_ASSET_TICKERS, SERVER_EVAL_SPLIT, seed=0)
+    heldout = _heldout_report(HELDOUT_TICKERS, SERVER_EVAL_SPLIT, seed=0)
 
     # Save latest checkpoint
     _save_checkpoint()
@@ -1605,11 +1621,7 @@ def _get_portfolio_agent(env):
 # The search runs as a background job: the dashboard polls its progress instead
 # of holding a request open for a minute. One job at a time keeps the CPU (and
 # the live brain) responsive.
-COMBO_TRAIN_TICKERS = {
-    t.strip().upper() for t in os.environ.get(
-        "FLYBRAIN_PORTFOLIO_TRAIN_TICKERS",
-        "MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG").split(",") if t.strip()
-}
+COMBO_TRAIN_TICKERS = set(MULTI_ASSET_TICKERS)
 _COMBO_JOBS: dict[str, dict] = {}
 _COMBO_LOCK = threading.Lock()
 _COMBO_ROWS: dict[tuple, dict] = {}
