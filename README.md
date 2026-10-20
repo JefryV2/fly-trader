@@ -993,6 +993,44 @@ universe, with log‑scaled equity curves and a strategy table. It reads
 `…_MIN_K`, `…_MAX_K`). If the checkpoint is missing the tab explains how to build
 it instead of failing.
 
+### Combo Lab: which k names should the fly be allowed to trade?
+
+The **Portfolio** tab also has a Combo Lab: pick 2–12 tickers on the left,
+choose **Pairs** or **Triples**, and the deployed portfolio fly trades *every
+subset* of that size. Each subset is ranked by the **fly's own validation
+return**, with excess over that basket's buy & hold shown on every row; only the
+winner is then run once on the **test** window.
+
+Why return rather than excess? An earlier build ranked by excess, and it picked
+a triple whose *benchmark* was weaker, not a combo where the fly traded better:
+adding `T` to `NVDA·XOM` lowered the basket's buy & hold while the fly's P&L was
+unchanged, so the triple "won" by −61 pp in a pair becoming +66 pp in a triple.
+Ties now break toward the simpler basket for the same reason. Excess remains the
+honesty column — it says whether the return came from the fly or from beta.
+
+- `POST /combo_search` `{tickers, size}` starts a background job (one at a time,
+  ≤240 combos); `GET /combo_search/{id}` returns progress, the live leaderboard,
+  the winner and its out-of-sample test row.
+- The card shows how many combos beat their own buy & hold and the **median**
+  excess, not just the top row. Picking the best of N is a search, so the top
+  validation number is optimistic by construction; the test row is the honest
+  estimate.
+- `test_is_ticker_holdout` distinguishes the strong case (the basket contains
+  none of the 12 training tickers) from a time-only holdout.
+
+A full run on the 10 holdout tickers (120 triples, 70 s):
+
+| search | val winner | val return | val excess | test (unseen tickers) | test Sharpe |
+|---|---|---:|---:|---|---:|
+| 120 triples | NVDA · JNJ · XOM | **+173.0 %** | +106.0 pp | **+582.7 % vs 175.6 % (+407.1 pp)** | 1.58 |
+| 6 pairs (NVDA/JPM/JNJ/XOM) | NVDA · XOM | +170.4 % | +74.2 pp | +283.4 % vs 344.6 % (**−61.1 pp**) | 1.44 |
+
+Across the 120 triples, 92 beat their own buy & hold (median +18.6 pp), so the
+effect is not one lucky row. The 6-pair pool is the counter-example: the same
+kind of winner failed to generalise, and the card says so plainly. Both are
+single-seed searches over one test path; the distribution is the more reliable
+signal than the winner's headline.
+
 ### Why the fly churned: the reward *horizon*, not the features
 
 Three daily‑rebalanced arms were trained to 400 episodes on the 12‑asset

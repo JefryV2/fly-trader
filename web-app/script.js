@@ -260,6 +260,7 @@ function applyConfigToUI(cfg) {
       btn.addEventListener('click', () => {
         btn.classList.toggle('on');
         updateUniverseHint();
+        updateComboHint();
       });
     });
   }
@@ -271,6 +272,13 @@ function applyConfigToUI(cfg) {
   if (bi && s.budget) bi.value = Math.round(s.budget);
   const dt = $('dynamic-sizing-toggle');
   if (dt) dt.checked = !!s.dynamic_sizing;
+
+  const badge = $('ticker-badge');
+  if (badge && s.tickers && s.tickers.length) {
+    badge.textContent = (s.mode === 'portfolio')
+      ? `${s.tickers.length} stocks · ${cfg.n_steps || 0} rebalances`
+      : `${s.tickers[0]} · ${cfg.n_steps || 0} steps`;
+  }
 
   applySessionMode(s.mode || 'single');
   updateUniverseHint();
@@ -337,7 +345,10 @@ function initUniverseControls() {
   const chips = $('ticker-chips');
   if (chips) {
     chips.addEventListener('click', e => {
-      if (e.target.classList.contains('ticker-chip')) updateUniverseHint();
+      if (e.target.classList.contains('ticker-chip')) {
+        updateUniverseHint();
+        updateComboHint();
+      }
     });
   }
   document.querySelectorAll('.budget-chip').forEach(c => {
@@ -352,6 +363,225 @@ function initUniverseControls() {
   const apply = $('apply-universe-btn');
   if (apply) apply.addEventListener('click', applyUniverse);
 }
+
+/* ─────────────────────────────────────────────
+   Combo Lab: make the fly try every k-stock subset
+───────────────────────────────────────────── */
+let comboSize = 3;
+let comboJobId = null;
+let comboPoll = null;
+let comboFails = 0;
+const COMBO_MAX = 240;
+
+function combosCount(n, k) {
+  if (n < k) return 0;
+  let out = 1;
+  for (let i = 0; i < k; i += 1) out = (out * (n - i)) / (i + 1);
+  return Math.round(out);
+}
+
+function setComboStatus(text, cls = '') {
+  const el = $('combo-status');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `uni-status${cls ? ` ${cls}` : ''}`;
+}
+
+function updateComboHint() {
+  const status = $('combo-status');
+  if (!status || comboJobId) return;
+  const n = selectedTickers().length;
+  const label = comboSize === 2 ? 'pairs' : 'triples';
+  const count = combosCount(n, comboSize);
+  if (n < 2) {
+    setComboStatus('Pick at least 2 stocks on the left.');
+  } else if (n < comboSize) {
+    setComboStatus(`Pick at least ${comboSize} stocks for ${label}.`);
+  } else if (count > COMBO_MAX) {
+    setComboStatus(`${count} ${label} is above the ${COMBO_MAX} limit — pick fewer stocks or use pairs.`, 'err');
+  } else {
+    setComboStatus(`${n} stocks · ${count} ${label} to try.`);
+  }
+}
+
+function initComboLab() {
+  document.querySelectorAll('#combo-sizes .combo-size').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (comboJobId) return;
+      comboSize = Number(btn.dataset.size) || 3;
+      document.querySelectorAll('#combo-sizes .combo-size')
+        .forEach(b => b.classList.toggle('active', b === btn));
+      updateComboHint();
+    });
+  });
+  $('combo-run-btn')?.addEventListener('click', runComboSearch);
+  $('combo-best')?.addEventListener('click', e => {
+    const b = e.target.closest('.combo-use');
+    if (b) useCombo(b.dataset.combo || '');
+  });
+  updateComboHint();
+}
+
+function comboPct(v) {
+  const n = Number(v) || 0;
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+
+function comboPp(v) {
+  const n = Number(v) || 0;
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)} pp`;
+}
+
+async function runComboSearch() {
+  if (comboJobId) return;
+  const tickers = selectedTickers();
+  if (tickers.length < comboSize) {
+    setComboStatus(`Need ${comboSize}+ stocks in the universe.`, 'err');
+    return;
+  }
+  if (combosCount(tickers.length, comboSize) > COMBO_MAX) {
+    setComboStatus(`That would be ${combosCount(tickers.length, comboSize)} combos — above the ${COMBO_MAX} limit.`, 'err');
+    return;
+  }
+  const btn = $('combo-run-btn');
+  btn.disabled = true;
+  $('combo-bar-wrap').hidden = false;
+  $('combo-bar').style.width = '0%';
+  $('combo-best').innerHTML = '';
+  $('combo-list').innerHTML = '';
+  $('combo-note').hidden = true;
+  const badge = $('combo-badge');
+  badge.textContent = 'starting';
+  badge.className = 'combo-badge live';
+  setComboStatus('Starting the search…');
+
+  try {
+    const r = await fetch(`${API}/combo_search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers, size: comboSize })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    comboJobId = d.job_id;
+    comboFails = 0;
+    badge.textContent = `0 / ${d.total}`;
+    comboPoll = setTimeout(pollCombo, 400);
+  } catch (e) {
+    btn.disabled = false;
+    badge.textContent = 'error';
+    badge.className = 'combo-badge err';
+    setComboStatus(String(e.message || e), 'err');
+  }
+}
+
+function renderCombo(d) {
+  const badge = $('combo-badge');
+  const total = Number(d.total) || 0;
+  const done = Number(d.done) || 0;
+
+  if (d.status === 'done') {
+    badge.textContent = 'done';
+    badge.className = 'combo-badge done';
+    $('combo-bar').style.width = '100%';
+    setComboStatus(`Evaluated ${done} combos in ${d.elapsed_s}s · ranked on validation.`, 'ok');
+  } else if (d.status === 'error') {
+    badge.textContent = 'error';
+    badge.className = 'combo-badge err';
+    setComboStatus(d.error || 'Search failed', 'err');
+  } else {
+    badge.textContent = `${done} / ${total}`;
+    badge.className = 'combo-badge live';
+    const phase = d.phase === 'test' ? ' · now running the winner on test' : '';
+    setComboStatus(`Fly evaluating combo ${done} / ${total}${phase}…`);
+    $('combo-bar').style.width = total ? `${Math.round((100 * done) / total)}%` : '0%';
+  }
+
+  if (Array.isArray(d.results) && d.results.length) {
+    $('combo-list').innerHTML = d.results.map((r, i) => {
+      const ex = Number(r.excess_pct) || 0;
+      return `<div class="combo-row${i === 0 ? ' best' : ''}">
+        <span class="combo-rank">${i + 1}</span>
+        <span class="combo-name">${(r.combo || []).join(' · ')}</span>
+        <span class="combo-nums">
+          <span class="combo-pos">${comboPct(r.return_pct)}</span> fly
+          <br><span class="${ex >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(ex)}</span> vs B&amp;H · Sh ${(Number(r.sharpe) || 0).toFixed(2)}
+        </span>
+      </div>`;
+    }).join('');
+  }
+
+  if (d.best && d.best.test) {
+    const b = d.best;
+    const t = b.test;
+    const holdout = b.test_is_ticker_holdout;
+    const testLabel = `${t.start} → ${t.end} · ${holdout ? 'unseen tickers' : 'seen tickers (time only)'}`;
+    $('combo-best').innerHTML = `
+      <div class="combo-best">
+        <div class="combo-best-head">
+          <span>Validation winner</span>
+          <span class="combo-best-name">${(b.combo || []).join(' · ')}</span>
+        </div>
+        <div class="combo-best-row">val: fly ${comboPct(b.return_pct)} · B&amp;H ${comboPct(b.bh_return_pct)} ·
+          <b class="${b.excess_pct >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(b.excess_pct)}</b></div>
+        <div class="combo-best-row test">test (${testLabel}): fly ${comboPct(t.return_pct)} ·
+          B&amp;H ${comboPct(t.bh_return_pct)} ·
+          <b class="${t.excess_pct >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(t.excess_pct)}</b>
+          · Sh ${(Number(t.sharpe) || 0).toFixed(2)}</div>
+        <button type="button" class="combo-use" data-combo="${(b.combo || []).join(',')}">Use this combo</button>
+      </div>`;
+  }
+
+  if (d.summary && d.summary.evaluated) {
+    const s = d.summary;
+    const note = $('combo-note');
+    note.hidden = false;
+    note.innerHTML = `<b>${s.beat_bh} / ${s.evaluated}</b> combos beat their own
+      buy &amp; hold; median excess <b>${comboPp(s.median_excess_pct)}</b>.
+      Keeping the best of ${s.evaluated} is a search — the test row is the
+      honest estimate.`;
+  }
+}
+
+async function pollCombo() {
+  if (!comboJobId) return;
+  const jobId = comboJobId;
+  try {
+    const r = await fetch(`${API}/combo_search/${jobId}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    comboFails = 0;
+    renderCombo(d);
+    if (d.status === 'queued' || d.status === 'running') {
+      comboPoll = setTimeout(pollCombo, 700);
+    } else {
+      comboPoll = null;
+      comboJobId = null;
+      $('combo-run-btn').disabled = false;
+    }
+  } catch (e) {
+    comboFails += 1;
+    if (comboFails > 8) {
+      comboPoll = null;
+      comboJobId = null;
+      $('combo-run-btn').disabled = false;
+      setComboStatus(`Lost the search: ${e.message || e}`, 'err');
+    } else {
+      comboPoll = setTimeout(pollCombo, 1500);
+    }
+  }
+}
+
+function useCombo(csv) {
+  const picked = new Set(csv.split(',').filter(Boolean));
+  if (!picked.size) return;
+  document.querySelectorAll('#ticker-chips .ticker-chip')
+    .forEach(b => b.classList.toggle('on', picked.has(b.dataset.ticker)));
+  updateUniverseHint();
+  setComboStatus(`Applying ${[...picked].join(' · ')}…`);
+  applyUniverse();
+}
+
 
 async function apiTrainBatch() {
   const btn = $('train-batch-btn');
@@ -2822,6 +3052,7 @@ async function boot() {
   } catch {}
   initThree();
   initUniverseControls();
+  initComboLab();
   await fetchConfig();
   await apiReset();
   updateNeuronCountDisplay();

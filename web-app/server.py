@@ -18,6 +18,9 @@ import sys, os, math, datetime as _dt
 from pathlib import Path
 import struct
 import json
+import threading
+import time
+import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -1555,20 +1558,210 @@ def _build_portfolio_env():
     return PortfolioEnv(_portfolio_tickers(), **kw)
 
 
+def _load_portfolio_agent(obs_dim: int):
+    """A private portfolio-shaped brain instance, loaded from the checkpoint.
+
+    Used by the live session (cached) and by background combo searches (one
+    fresh instance per job, so a search can never race the live telemetry).
+    """
+    agent = FlyBrainAgent(obs_dim=obs_dim, use_connectome=USE_CONNECTOME,
+                          N_NEURONS=N_NEURONS,
+                          use_full_readout=PORTFOLIO_FULL_READOUT)
+    agent.set_policy_state(torch.load(PORTFOLIO_CKPT, map_location="cpu",
+                                      weights_only=False))
+    agent.eval()
+    return agent
+
+
 def _get_portfolio_agent(env):
     """A second, portfolio-shaped brain instance (the live one is 398-dim
     single-asset). Built lazily so server startup stays fast."""
     global _portfolio_agent
     if _portfolio_agent is not None and _portfolio_agent.obs_dim == env.obs_dim:
         return _portfolio_agent
-    agent = FlyBrainAgent(obs_dim=env.obs_dim, use_connectome=USE_CONNECTOME,
-                          N_NEURONS=N_NEURONS,
-                          use_full_readout=PORTFOLIO_FULL_READOUT)
-    agent.set_policy_state(torch.load(PORTFOLIO_CKPT, map_location="cpu",
-                                      weights_only=False))
-    agent.eval()
-    _portfolio_agent = agent
-    return agent
+    _portfolio_agent = _load_portfolio_agent(env.obs_dim)
+    return _portfolio_agent
+
+
+# ── Combo Lab ──────────────────────────────────────────────────────────────
+# "Which k names should the fly be allowed to trade?" Enumerate every k-stock
+# subset of the current universe, run the *deployed* portfolio checkpoint on the
+# validation split, and rank by the fly's own return (excess vs that basket's
+# buy & hold is reported on every row). The winner is then evaluated once on
+# test and reported separately. Validation is the only split allowed to drive
+# selection, so the test number is the honest generalisation estimate.
+#
+# The search runs as a background job: the dashboard polls its progress instead
+# of holding a request open for a minute. One job at a time keeps the CPU (and
+# the live brain) responsive.
+COMBO_TRAIN_TICKERS = {
+    t.strip().upper() for t in os.environ.get(
+        "FLYBRAIN_PORTFOLIO_TRAIN_TICKERS",
+        "MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG").split(",") if t.strip()
+}
+_COMBO_JOBS: dict[str, dict] = {}
+_COMBO_LOCK = threading.Lock()
+_COMBO_ROWS: dict[tuple, dict] = {}
+
+
+def _combo_key(combo, split):
+    try:
+        stamp = PORTFOLIO_CKPT.stat().st_mtime
+    except OSError:
+        stamp = 0.0
+    return (tuple(combo), str(split), PORTFOLIO_CKPT.name, stamp,
+            PORTFOLIO_PLAN, PORTFOLIO_GATE, PORTFOLIO_MIN_K, PORTFOLIO_MAX_K,
+            PORTFOLIO_REBALANCE)
+
+
+def _combo_env(tickers, split):
+    from portfolio_env import PortfolioEnv
+    from config import SPLIT_PLANS
+    start, end = SPLIT_PLANS[PORTFOLIO_PLAN][split]
+    kw = dict(start_date=start, end_date=end,
+              rebalance_every=PORTFOLIO_REBALANCE,
+              alloc_min_k=PORTFOLIO_MIN_K, alloc_max_k=PORTFOLIO_MAX_K)
+    if PORTFOLIO_GATE == "topk":
+        kw["alloc_gate"] = "topk"
+        kw["alloc_topk"] = PORTFOLIO_MIN_K
+    elif PORTFOLIO_GATE != "none":
+        kw["alloc_gate"] = PORTFOLIO_GATE
+    return PortfolioEnv(list(tickers), **kw)
+
+
+def _combo_rollout(combo, split, agent):
+    """One deterministic fly rollout plus the same basket's buy & hold."""
+    from portfolio_env import buy_hold_weights, run_static_weights
+    env = _combo_env(combo, split)
+    env.reset()
+    done = False
+    while not done:
+        actions, _probs, _values = agent.select_actions_batch(
+            env.observe(), deterministic=True)
+        _, _, done, _ = env.step(np.asarray(actions, dtype=int))
+    fly = env.metrics()
+    bh = run_static_weights(env, buy_hold_weights, 1)
+    decisions = max(1, len(env.history) - 1)
+    return {
+        "combo": list(combo),
+        "split": split,
+        "start": str(env.dates[0].date()),
+        "end": str(env.dates[-1].date()),
+        "return_pct": round(float(fly["total_return_pct"]), 2),
+        "bh_return_pct": round(float(bh["total_return_pct"]), 2),
+        "excess_pct": round(float(fly["total_return_pct"]
+                                  - bh["total_return_pct"]), 2),
+        "sharpe": round(float(fly["sharpe"]), 2),
+        "max_drawdown_pct": round(float(fly["max_drawdown_pct"]), 2),
+        "avg_positions": round(float(fly["avg_positions"]), 2),
+        "turnover_per_decision": round(float(fly["turnover"]) / decisions, 3),
+        "decisions": int(decisions),
+    }
+
+
+def _combo_worker(job_id, combos, refresh):
+    from combo_lab import rank, summarise
+    job = _COMBO_JOBS[job_id]
+    t0 = time.time()
+    results = []
+    with _COMBO_LOCK:
+        job["status"] = "running"
+    try:
+        probe = _combo_env(combos[0], "val")
+        agent = _load_portfolio_agent(probe.obs_dim)
+        del probe
+        for i, combo in enumerate(combos):
+            key = _combo_key(combo, "val")
+            row = None if refresh else _COMBO_ROWS.get(key)
+            if row is None:
+                row = _combo_rollout(combo, "val", agent)
+                _COMBO_ROWS[key] = row
+            results.append(row)
+            with _COMBO_LOCK:
+                job["done"] = i + 1
+                job["results"] = rank(results)[:12]
+                job["summary"] = summarise(results, len(combos))
+        ranked = rank(results)
+        best = None
+        if ranked:
+            top = ranked[0]
+            key = _combo_key(top["combo"], "test")
+            test = None if refresh else _COMBO_ROWS.get(key)
+            if test is None:
+                with _COMBO_LOCK:
+                    job["phase"] = "test"
+                test = _combo_rollout(top["combo"], "test", agent)
+                _COMBO_ROWS[key] = test
+            best = dict(top)
+            best["test"] = test
+            best["test_is_ticker_holdout"] = not any(
+                t in COMBO_TRAIN_TICKERS for t in best["combo"])
+        with _COMBO_LOCK:
+            job.update(status="done", phase=None, best=best,
+                       results=ranked[:12],
+                       summary=summarise(results, len(combos)),
+                       elapsed_s=round(time.time() - t0, 1))
+    except Exception as exc:                      # keep the job introspectable
+        with _COMBO_LOCK:
+            job.update(status="error", error=str(exc), phase=None,
+                       elapsed_s=round(time.time() - t0, 1))
+
+
+class ComboPayload(BaseModel):
+    tickers: list[str] | None = None
+    size: int = 3
+    refresh: bool = False
+
+
+@app.post("/combo_search")
+def start_combo_search(payload: ComboPayload):
+    """Start a background search over every ``size``-stock combo of a universe."""
+    from combo_lab import MAX_COMBOS, combos_for, normalise_pool
+    pool = normalise_pool(payload.tickers if payload.tickers is not None
+                          else SESSION["tickers"])
+    size = int(payload.size)
+    if not 2 <= size <= 4:
+        raise HTTPException(400, "Combo size must be 2, 3 or 4")
+    if len(pool) < size:
+        raise HTTPException(
+            400, f"Need at least {size} stocks in the universe, got {len(pool)}")
+    unknown = [t for t in pool if t not in AVAILABLE_TICKERS]
+    if unknown:
+        raise HTTPException(400, f"Unknown ticker(s): {', '.join(unknown)}")
+    if not PORTFOLIO_CKPT.is_file():
+        raise HTTPException(
+            400, f"Portfolio checkpoint missing ({PORTFOLIO_CKPT.name}); "
+                 "train it with the recipe in README first.")
+    combos = combos_for(pool, size)
+    if len(combos) > MAX_COMBOS:
+        raise HTTPException(
+            400, f"C({len(pool)},{size}) = {len(combos)} combos, above the "
+                 f"{MAX_COMBOS}-combo limit. Pick fewer stocks or a smaller size.")
+    with _COMBO_LOCK:
+        if any(j["status"] in ("queued", "running")
+               for j in _COMBO_JOBS.values()):
+            raise HTTPException(409, "A combo search is already running")
+        job_id = uuid.uuid4().hex[:12]
+        _COMBO_JOBS[job_id] = {
+            "job_id": job_id, "status": "queued", "phase": "val",
+            "pool": pool, "size": size, "done": 0, "total": len(combos),
+            "results": [], "summary": {"evaluated": 0, "total": len(combos)},
+            "best": None, "error": None, "elapsed_s": 0.0,
+        }
+    threading.Thread(target=_combo_worker,
+                     args=(job_id, combos, bool(payload.refresh)),
+                     daemon=True).start()
+    return {"job_id": job_id, "pool": pool, "size": size,
+            "total": len(combos)}
+
+
+@app.get("/combo_search/{job_id}")
+def combo_search_status(job_id: str):
+    with _COMBO_LOCK:
+        job = _COMBO_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Unknown combo search")
+        return dict(job)
 
 
 def _portfolio_sample(points, stride):

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=21" />
+  <link rel="stylesheet" href="/static/style.css?v=22" />
 </head>
 <body>
 
@@ -531,6 +531,35 @@
           <div class="pf-table" id="portfolio-table"></div>
         </div>
 
+        <!-- Combo Lab: let the fly try every k-stock subset -->
+        <div class="card" id="combo-card">
+          <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Combo Lab</span>
+            <span class="combo-badge" id="combo-badge">idle</span>
+          </div>
+          <div class="combo-help">
+            The portfolio fly trades every <b>k-stock combo</b> from the universe
+            chips on the left, then ranks them by the <b>fly's own validation
+            return</b> (excess vs that combo's buy &amp; hold is shown on every
+            row). Ranking uses the <b>validation</b> window only; the winner is
+            run once on the unseen <b>test</b> window.
+          </div>
+          <div class="combo-controls">
+            <div class="combo-sizes" id="combo-sizes">
+              <button type="button" class="combo-size" data-size="2">Pairs</button>
+              <button type="button" class="combo-size active" data-size="3">Triples</button>
+            </div>
+            <button type="button" class="btn-clear-sims" id="combo-run-btn">Run search</button>
+          </div>
+          <div class="uni-status" id="combo-status">Pick 3+ stocks on the left, then run.</div>
+          <div class="combo-bar-wrap" id="combo-bar-wrap" hidden>
+            <div class="combo-bar" id="combo-bar"></div>
+          </div>
+          <div id="combo-best"></div>
+          <div class="combo-list" id="combo-list"></div>
+          <div class="combo-note" id="combo-note" hidden></div>
+        </div>
+
       </div>
 
       <!-- ─ INFO TAB ─ -->
@@ -686,6 +715,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=21"></script>
+  <script src="/static/script.js?v=24"></script>
 </body>
 </html>

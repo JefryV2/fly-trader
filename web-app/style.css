@@ -864,3 +864,95 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
   border: 1px solid var(--border); border-radius: 5px; padding: .4rem; margin-top: .4rem;
 }
 
+
+/* ── Combo Lab ──────────────────────────────────────────────────────────── */
+.combo-badge {
+  font-family: var(--ff-mono); font-size: var(--fs-2xs); text-transform: uppercase;
+  letter-spacing: .04em; color: var(--txt-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: .05rem .4rem;
+}
+.combo-badge.live { color: #00e5ff; border-color: rgba(0,229,255,.35); background: rgba(0,229,255,.07); }
+.combo-badge.done { color: var(--green); border-color: rgba(52,211,153,.30); }
+.combo-badge.err  { color: var(--red);   border-color: rgba(248,113,113,.35); }
+.combo-help {
+  font-size: var(--fs-xs); color: var(--txt-dim);
+  line-height: 1.45; margin-bottom: .45rem;
+}
+.combo-help b { color: var(--txt); font-weight: 600; }
+.combo-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .4rem; margin-bottom: .3rem;
+}
+.combo-sizes { display: inline-flex; gap: .22rem; }
+.combo-size {
+  font: inherit; font-size: var(--fs-2xs); letter-spacing: .03em;
+  color: var(--txt-dim); background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 5px;
+  padding: .22rem .5rem; cursor: pointer; transition: .15s;
+}
+.combo-size:hover { border-color: var(--border-h); color: var(--txt); }
+.combo-size.active {
+  color: #00e5ff; border-color: rgba(0,229,255,.38);
+  background: rgba(0,229,255,.08);
+}
+.combo-bar-wrap {
+  height: 3px; border-radius: 2px; background: var(--surface2);
+  overflow: hidden; margin: .1rem 0 .45rem;
+}
+.combo-bar {
+  height: 100%; width: 0;
+  background: linear-gradient(90deg, #3d8eff, #00e5ff);
+  transition: width .25s;
+}
+.combo-list { display: flex; flex-direction: column; gap: .18rem; margin-top: .35rem; }
+.combo-row {
+  display: grid; grid-template-columns: 1rem 1fr; column-gap: .35rem;
+  padding: .28rem .38rem; border-radius: 5px;
+  font-family: var(--ff-mono); font-size: var(--fs-2xs);
+}
+.combo-row.best {
+  background: rgba(0,229,255,.07);
+  box-shadow: inset 0 0 0 1px rgba(0,229,255,.22);
+}
+.combo-rank { color: var(--txt-dim); grid-row: span 2; padding-top: .05rem; }
+.combo-name {
+  color: var(--txt); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.combo-nums { color: var(--txt-dim); line-height: 1.35; }
+.combo-pos { color: var(--green); }
+.combo-neg { color: var(--red); }
+.combo-best {
+  margin-top: .45rem; padding: .45rem .5rem; border-radius: 6px;
+  background: rgba(0,229,255,.06); border: 1px solid rgba(0,229,255,.22);
+}
+.combo-best-head {
+  display: flex; justify-content: space-between; gap: .3rem;
+  font-size: var(--fs-2xs); text-transform: uppercase;
+  letter-spacing: .04em; color: #00e5ff;
+}
+.combo-best-name {
+  color: var(--txt); font-family: var(--ff-mono);
+  text-transform: none; letter-spacing: 0;
+}
+.combo-best-row {
+  font-family: var(--ff-mono); font-size: var(--fs-2xs);
+  color: var(--txt-dim); margin-top: .22rem; line-height: 1.4;
+}
+.combo-best-row.test {
+  color: var(--txt); border-top: 1px dashed var(--border);
+  padding-top: .22rem; margin-top: .3rem;
+}
+.combo-best-row b { font-weight: 700; }
+.combo-use {
+  margin-top: .38rem; width: 100%; font: inherit; font-size: var(--fs-2xs);
+  padding: .3rem .4rem; border-radius: 5px; cursor: pointer;
+  color: #00e5ff; background: rgba(0,229,255,.10);
+  border: 1px solid rgba(0,229,255,.35); transition: .15s;
+}
+.combo-use:hover { background: rgba(0,229,255,.18); }
+.combo-note {
+  margin-top: .45rem; font-size: var(--fs-2xs);
+  color: var(--txt-dim); line-height: 1.45;
+}
+.combo-note b { color: var(--txt); }
