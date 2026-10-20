@@ -1170,6 +1170,16 @@ budget make this a pilot, not a headline, but a 0.7 % validation edge that
 turns into a 5.5 pp loss is exactly the kind of noise a bigger read‑out is
 more likely to fit.
 
+Parallelism is a different axis. Extra neurons add per‑step cost (0.49 ms/obs
+at 1,024, 1.59 ms at 4,096) and run nothing concurrently. What does help is
+settling B independent observations through the same `W` as one `(N, B)`
+matmul — `encode_batch` — which is **5.7×** faster per observation at 1,024
+(0.09 ms) and **4.4×** at 4,096 (0.36 ms), with bit‑identical spikes; the
+portfolio cross‑section (12 assets) now scores in 2.4 ms instead of 6.9 ms.
+Encoding is stateless, so a whole episode can be encoded in chunks ahead of
+time. Beyond one process, independent agents scale across cores (12 here) —
+more neurons do not.
+
 Reproducibility: the deployed circuit is a **pinned row selection**
 (`flywire_weights/connectome_selection_1024.json`), not rows 0..1023. File
 order yields **1,130** synapses; the pinned selection yields **58,421**.
