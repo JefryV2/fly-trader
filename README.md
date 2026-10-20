@@ -1183,6 +1183,23 @@ cross‑section read‑out can carry, a brain that keeps temporal state (this on
 stateless per observation), or anatomical fidelity rather than P&L. Reproduce
 with `python scripts/probe_scaling.py`.
 
+Two of those benefits can be built on the existing 1,024 neurons, and both were
+measured on the same pooled probe:
+
+| read‑out | dimensions | test r |
+|---|---:|---:|
+| MBON + sensory (shipped) | 88 | +0.386 |
+| + 256‑dim projection of all 1,024 spikes | 280 | **+0.424** |
+| + causal 0.9 spike trace | 152 | +0.412 |
+| both | 344 | **+0.441** |
+
+The wide projection is what 4,096 neurons would offer as 256 MBONs; the trace
+supplies the temporal state the stateless encoding lacks. Both are opt‑in
+(`--full-readout --full-readout-proj 256`, `--memory-rho 0.9`) and need a
+checkpoint trained with them — the shipped checkpoints keep the 88‑dim layout.
+Memory is single‑asset only: a cross‑section is many assets at one instant, not
+one asset across time. Reproduce with `python scripts/probe_readout.py`.
+
 Parallelism is a different axis. Extra neurons add per‑step cost (0.49 ms/obs
 at 1,024, 1.59 ms at 4,096) and run nothing concurrently. What does help is
 settling B independent observations through the same `W` as one `(N, B)`

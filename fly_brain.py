@@ -663,7 +663,7 @@ class FlyBrainAgent(nn.Module):
     """
     SENSORY_DIM = 24  # dims of the compact observation summary (see sensory_from_obs)
 
-    def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None, use_xsection: bool = False, use_full_readout: bool = False, full_readout_proj: int = 8):
+    def __init__(self, obs_dim: int = OBS_DIM, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None, use_xsection: bool = False, use_full_readout: bool = False, full_readout_proj: int = 8, memory_rho: float = 0.0):
         super().__init__()
         self.simulator = MaleCNS1024Simulator(
             use_connectome=use_connectome,
@@ -696,6 +696,14 @@ class FlyBrainAgent(nn.Module):
         self.full_readout_extra = (
             len(self.REGION_NAMES) + self.full_readout_proj if self.use_full_readout else 0
         )
+        # Optional causal memory: a decaying trace of MBON spikes across time
+        # steps. The encoding is stateless per observation, so without this the
+        # read-out cannot see history; a bigger recurrent brain would provide
+        # that. ``memory_rho=0`` (default) keeps the feature vector and the
+        # shipped checkpoints unchanged.
+        self.memory_rho = float(memory_rho)
+        self.memory_dim = self.mbon_dim if self.memory_rho > 0 else 0
+        self._trace = None
         # The connectome read-out is concatenated with a compact, live sensory
         # vector derived from the observation (see ``sensory_from_obs``). The
         # cached connectome currently emits an all-zero MBON pattern for every
@@ -710,7 +718,8 @@ class FlyBrainAgent(nn.Module):
         # buy & hold — so the head stays small and the stability work lives in
         # the update rule instead (see ``train_online_step``).
         self.feature_encoder = nn.Sequential(
-            nn.Linear(self.mbon_dim + self.full_readout_extra + self.SENSORY_DIM + self.sensory_extra, 128),
+            nn.Linear(self.mbon_dim + self.full_readout_extra + self.memory_dim
+                      + self.SENSORY_DIM + self.sensory_extra, 128),
             nn.LayerNorm(128),
             nn.SiLU(),
             nn.Identity(),  # was Dropout(0.1): same index, no keys
@@ -864,7 +873,12 @@ class FlyBrainAgent(nn.Module):
         return np.asarray(feats, dtype=np.float32)
 
     def encode_obs(self, obs):
-        """Return (feature_vector, spikes_1024) for one observation, once."""
+        """Return (feature_vector, spikes_1024) for one observation, once.
+
+        With ``memory_rho > 0`` this also advances a causal spike trace, so
+        repeated calls must be in time order (call ``reset_memory`` at the start
+        of every episode).
+        """
         obs2 = np.asarray(obs, dtype=np.float32).reshape(1, -1)
         spikes = self.simulator.encode(obs2)[0]
         mbon = spikes[self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]
@@ -876,6 +890,11 @@ class FlyBrainAgent(nn.Module):
             proj = s @ self.readout_proj.detach().cpu().numpy().astype(np.float32)
             parts.append(means)
             parts.append(np.asarray(proj, dtype=np.float32))
+        if self.memory_dim:
+            if self._trace is None:
+                self._trace = np.zeros(self.mbon_dim, dtype=np.float32)
+            self._trace = (self.memory_rho * self._trace + mbon).astype(np.float32)
+            parts.append(self._trace.copy())
         parts.append(self.sensory_from_obs(obs2[0]))
         feat = np.concatenate(parts).astype(np.float32)
         return feat, spikes
@@ -883,6 +902,10 @@ class FlyBrainAgent(nn.Module):
     def encode_feature(self, obs) -> np.ndarray:
         """Deterministic feature vector fed to the read-out: [MBON spikes, sensory]."""
         return self.encode_obs(obs)[0]
+
+    def reset_memory(self):
+        """Clear the causal spike trace; call at the start of every episode."""
+        self._trace = None
 
     def encode_obs_batch(self, obs_mat) -> np.ndarray:
         """Batched read-out features for ``(n, obs_dim)`` observations.
@@ -894,6 +917,11 @@ class FlyBrainAgent(nn.Module):
         obs = np.asarray(obs_mat, dtype=np.float32)
         if obs.ndim == 1:
             obs = obs[None, :]
+        if self.memory_dim:
+            raise ValueError(
+                "memory_rho is only supported for single-asset encoding: a "
+                "cross-section is many assets at one instant, not one asset "
+                "across time, so there is no per-asset trace to carry.")
         spikes = np.asarray(self.simulator.encode_batch(obs), dtype=np.float32)
         parts = [spikes[:, self.simulator.IDX_MBON.start:self.simulator.IDX_MBON.stop]]
         if self.use_full_readout:
@@ -932,15 +960,24 @@ class FlyBrainAgent(nn.Module):
         logits, value = self.forward_features(torch.from_numpy(feats))
         return logits, value, self.simulator.encode(obs_np)
 
-    def select_action(self, obs_np: np.ndarray, reward: float = 0.0, deterministic: bool = False):
+    def select_action(self, obs_np: np.ndarray, reward: float = 0.0, deterministic: bool = False,
+                      feat: np.ndarray = None):
         """
         Evaluates current market state and returns chosen action, probabilities,
         and full 1024-neuron spiking activity.
+
+        Pass ``feat`` (an already-encoded feature vector) to avoid encoding the
+        same observation twice; this is also what keeps the stateful memory
+        trace from advancing twice per step.
         """
         self.eval()
         with torch.no_grad():
             row = np.asarray(obs_np, dtype=np.float32).reshape(-1)
-            feat, spikes_1024 = self.encode_obs(row)
+            if feat is None:
+                feat, spikes_1024 = self.encode_obs(row)
+            else:
+                feat = np.asarray(feat, dtype=np.float32).reshape(-1)
+                spikes_1024 = None
             logits, value = self.forward_features(torch.from_numpy(feat)[None, :])
 
             probs = F.softmax(logits[0], dim=-1).cpu().numpy()
@@ -1195,6 +1232,7 @@ class FlyBrainAgent(nn.Module):
 
     def reset(self):
         self.simulator.reset()
+        self.reset_memory()
 
 
 # Backward-compatible wrapper

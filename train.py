@@ -199,6 +199,14 @@ def main():
     p.add_argument("--use-connectome", dest="use_connectome", action="store_true", default=True)
     p.add_argument("--no-connectome", dest="use_connectome", action="store_false")
     p.add_argument("--n-neurons", type=int, default=1024)
+    p.add_argument("--full-readout", dest="use_full_readout", action="store_true",
+                   help="feed region means + a projection of all spikes to the read-out")
+    p.add_argument("--full-readout-proj", type=int, default=8,
+                   help="width of the whole-brain projection (256 matches what 4096 "
+                        "neurons would offer as MBON width, at 1024 neurons)")
+    p.add_argument("--memory-rho", type=float, default=0.0,
+                   help="decay of the causal MBON spike trace (0 disables). 0.9 gives "
+                        "the read-out a multi-day memory")
     p.add_argument("--out", default=str(CHECKPOINT_DIR / "fly_brain_trained.pt"))
     p.add_argument("--resume", action="store_true",
                    help="continue from <out>.latest if present (reboot/power-cut safe). "
@@ -230,7 +238,8 @@ def main():
     print(f"[train] splits={plan(args)}")
 
     agent = FlyBrainAgent(obs_dim=obs_dim, use_connectome=args.use_connectome, N_NEURONS=args.n_neurons,
-                          use_xsection=args.use_xsection)
+                          use_xsection=args.use_xsection, use_full_readout=args.use_full_readout,
+                          full_readout_proj=args.full_readout_proj, memory_rho=args.memory_rho)
     agent.optimizer.param_groups[0]["lr"] = args.lr
     agent.buy_margin_coef = 0.35 if args.buy_margin else 0.0
     agent.action_floor = args.action_floor

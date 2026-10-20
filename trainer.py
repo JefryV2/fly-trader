@@ -99,6 +99,7 @@ def train_episode(
         norm = None
 
     obs, _ = env.reset(seed=seed)
+    agent.reset_memory()
     history = [float(env.initial_cash)]
     losses = []
     previous_shaped = 0.0
@@ -133,7 +134,7 @@ def train_episode(
     next_feat = agent.encode_feature(obs)
     while not done and step < limit:
         feat = next_feat
-        _, raw_probs, _, _ = agent.select_action(obs, reward=previous_shaped)
+        _, raw_probs, _, _ = agent.select_action(obs, reward=previous_shaped, feat=feat)
         probs = apply_preset(
             raw_probs, mask_preset,
             shares=env.shares, cash=env.cash,
