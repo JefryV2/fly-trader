@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from config import SPLITS, SERVER_EVAL_SPLIT, SERVER_TRAIN_SPLIT
@@ -1446,6 +1446,36 @@ def clear_simulation_history():
     _simulation_runs = []
     _save_simulation_history()
     return {"status": "cleared", "total_runs": 0}
+
+_EDGE_CACHE: dict[str, np.ndarray] = {}
+
+
+@app.get("/connectome_edges.bin")
+def connectome_edges(top: int = 12000):
+    """Real FlyWire-derived synapse list for the 1,024 model neurons.
+
+    Returns little-endian float32 triples (source_index, target_index, |w|),
+    strongest first, capped at ``top``. The browser draws these as lines, so
+    the 3-D view shows the actual connectivity instead of an empty overlay.
+    """
+    key = "all"
+    if key not in _EDGE_CACHE:
+        W = np.abs(np.asarray(brain.simulator.W_dense, dtype=np.float32))
+        np.fill_diagonal(W, 0.0)
+        src, tgt = np.nonzero(W)                      # row-major, deterministic
+        w = W[src, tgt]
+        order = np.argsort(-w, kind="stable")
+        _EDGE_CACHE[key] = np.stack(
+            [src[order], tgt[order], w[order]], axis=1).astype("<f4")
+    edges = _EDGE_CACHE[key]
+    n = max(1, min(int(top), len(edges)))
+    body = edges[:n].tobytes()
+    return Response(content=body, media_type="application/octet-stream", headers={
+        "X-Total-Edges": str(len(edges)),
+        "X-Returned-Edges": str(n),
+        "Cache-Control": "public, max-age=3600",
+    })
+
 
 @app.get("/brain_atlas")
 def brain_atlas():

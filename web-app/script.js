@@ -121,6 +121,7 @@ async function apiReset() {
     spikeData1024 = spikeData;
     currentDopamine       = 0.0;
     updateDopamineUI(0.0);
+    updateSynapseGlow(spikeData);
     drawPortfolioChart();
     drawRewardChart();
     drawHeatmap(spikeData);
@@ -447,6 +448,7 @@ function handleStepResult(d) {
   spikeData1024 = spikeData; // Alias for backward compatibility
   lastAction      = d.action_idx;
   currentDopamine = d.dopamine || 0.0;
+  updateSynapseGlow(spikeData);
   updateNeuronCountDisplay();
 
   const sharpe = typeof d.sharpe === 'number' && isFinite(d.sharpe) ? d.sharpe.toFixed(3) : '0.000';
@@ -783,9 +785,9 @@ function drawOscilloscope() {
 ───────────────────────────────────────────── */
 let threeScene, threeCamera, threeRenderer;
 let atlasPointsMesh, instancedMesh, synapseLines, haloPoints, brainShellMesh;
-let currentView = 'biological';
+let currentView = 'connectome';
 let currentRegionFilter = 'all';
-let showTracts = false; // By default NO random lines: pure genuine fruit fly brain anatomy!
+let showTracts = true;   // real FlyWire synapse layer, on by default
 let isDragging = false, prevMouseX = 0, prevMouseY = 0;
 let camPhi = 0.08, camTheta = 0.0, camRadius = 5.8;
 let circuitAtlasIndices = new Int32Array(N_NEURONS);
@@ -795,7 +797,12 @@ let brainCenter = new THREE.Vector3(0, 0, 0);
 const dummy = new THREE.Object3D();
 let activeCoords = new Float32Array(N_NEURONS * 3);  // agent somas embedded in Central Brain
 let neuronRegions = new Uint8Array(N_NEURONS);       // 0: AL, 1: KC, 2: CX, 3: DAN, 4: MBON
-const synapticPairs = [];                              // Bundled anatomical fascicles
+
+// Real FlyWire-derived synaptic edges between the 1,024 model neurons.
+const SYNAPSE_TOP = 3000;           // strongest |w| drawn; full matrix is 58,421
+let connectomeEdges = null;         // { n, src:Uint16Array, tgt:Uint16Array, w:Float32Array, base:Float32Array }
+let synapseGlow = null;             // per-edge activity glow, decays each step
+let synapseTotal = 0;               // total edges available on the server
 
 // 1024-LIF Region colors
 const REGION_COLORS = [
@@ -999,10 +1006,20 @@ function buildMaleCnsPointsMesh() {
   });
 
   atlasPointsMesh = new THREE.Points(geometry, atlasPointsMaterial);
+  atlasPointsMesh.renderOrder = 1;
   threeScene.add(atlasPointsMesh);
 }
 
-/* ── Generate Anatomical Coordinates for 1024-LIF Somas in Central Brain ── */
+/* ── Place the 1,024 agent somata in five spatially coherent lobes ──
+   The model's AL/KC/CX/DAN/MBON blocks are a *structural* split of the
+   1,024 neurons (fly_brain.py documents this; cell_type_verified = False),
+   not measured cell types. They used to be filled with the first somata of
+   the central brain in file order, which are scattered at random through
+   the volume (10-NN same-block ≈ 42%, i.e. chance), so the colours read as
+   speckle rather than parts. We keep the same blocks and exact counts but
+   take real central-brain somata from five compact, well-separated regions
+   (farthest-point seeds + Lloyd iterations). Every position is still a
+   measured soma; only the assignment is chosen for legibility. */
 function generateEmbeddedAgentPositions() {
   const useAtlas = maleCnsPositions && maleCnsCount > 0;
   const rng = (seed) => {
@@ -1014,34 +1031,135 @@ function generateEmbeddedAgentPositions() {
   };
   const rand = rng(711923);
 
+  const BLOCK_SIZES = [128, 640, 128, 64, 64];   // AL, KC, CX, DAN, MBON
+
   if (useAtlas) {
-    const centralSomata = [];
+    const central = [];
     for (let k = 0; k < maleCnsCount; k++) {
-      if (maleCnsGroups[k] === 1) centralSomata.push(k);
+      if (maleCnsGroups[k] === 1) central.push(k);
+    }
+    const nC = central.length;
+
+    // centroid of the central brain
+    let cx = 0, cy = 0, cz = 0;
+    for (let c = 0; c < nC; c++) {
+      const k = central[c] * 3;
+      cx += maleCnsPositions[k]; cy += maleCnsPositions[k + 1]; cz += maleCnsPositions[k + 2];
+    }
+    cx /= nC; cy /= nC; cz /= nC;
+
+    // farthest-point seeds: start at the somata closest to the centroid,
+    // then repeatedly take the somata farthest from every seed so far.
+    let seed0 = central[0], bestD = Infinity;
+    for (let c = 0; c < nC; c++) {
+      const k = central[c] * 3;
+      const d = (maleCnsPositions[k] - cx) ** 2 + (maleCnsPositions[k + 1] - cy) ** 2
+              + (maleCnsPositions[k + 2] - cz) ** 2;
+      if (d < bestD) { bestD = d; seed0 = central[c]; }
+    }
+    const centers = [seed0];
+    while (centers.length < 5) {
+      let pick = -1, pickD = -1;
+      for (let c = 0; c < nC; c++) {
+        const k = central[c] * 3, x = maleCnsPositions[k],
+              y = maleCnsPositions[k + 1], z = maleCnsPositions[k + 2];
+        let m = Infinity;
+        for (let s = 0; s < centers.length; s++) {
+          const sk = centers[s] * 3;
+          const d = (x - maleCnsPositions[sk]) ** 2 + (y - maleCnsPositions[sk + 1]) ** 2
+                  + (z - maleCnsPositions[sk + 2]) ** 2;
+          if (d < m) m = d;
+        }
+        if (m > pickD) { pickD = m; pick = central[c]; }
+      }
+      centers.push(pick);
     }
 
-    const nCentral = centralSomata.length;
-    // Map the 5 functional regions to Central Brain somata:
-    // AL (128), KC (640), CX (128), DAN (64), MBON (64)
-    const alIndices   = centralSomata.slice(0, 128);
-    const kcIndices   = centralSomata.slice(128, 128 + 640);
-    const cxIndices   = centralSomata.slice(768, 768 + 128);
-    const danIndices  = centralSomata.slice(896, 896 + 64);
-    const mbonIndices = centralSomata.slice(960, 960 + 64);
-    const ordered = alIndices.concat(kcIndices, cxIndices, danIndices, mbonIndices);
+    // Lloyd iterations so each lobe sits on a dense part of the soma cloud
+    const sx = new Float64Array(5), sy = new Float64Array(5), sz = new Float64Array(5);
+    const cnt = new Int32Array(5);
+    const lab = new Uint8Array(nC);
+    for (let iter = 0; iter < 6; iter++) {
+      sx.fill(0); sy.fill(0); sz.fill(0); cnt.fill(0);
+      for (let c = 0; c < nC; c++) {
+        const k = central[c] * 3, x = maleCnsPositions[k],
+              y = maleCnsPositions[k + 1], z = maleCnsPositions[k + 2];
+        let bi = 0, bd = Infinity;
+        for (let s = 0; s < 5; s++) {
+          const sk = centers[s] * 3;
+          const d = (x - maleCnsPositions[sk]) ** 2 + (y - maleCnsPositions[sk + 1]) ** 2
+                  + (z - maleCnsPositions[sk + 2]) ** 2;
+          if (d < bd) { bd = d; bi = s; }
+        }
+        lab[c] = bi;
+        sx[bi] += x; sy[bi] += y; sz[bi] += z; cnt[bi]++;
+      }
+      for (let s = 0; s < 5; s++) {
+        if (cnt[s] === 0) continue;
+        let bi = -1, bd = Infinity;
+        for (let c = 0; c < nC; c++) {
+          if (lab[c] !== s) continue;
+          const k = central[c] * 3;
+          const d = (maleCnsPositions[k] - sx[s] / cnt[s]) ** 2
+                  + (maleCnsPositions[k + 1] - sy[s] / cnt[s]) ** 2
+                  + (maleCnsPositions[k + 2] - sz[s] / cnt[s]) ** 2;
+          if (d < bd) { bd = d; bi = c; }
+        }
+        if (bi >= 0) centers[s] = central[bi];
+      }
+    }
 
-    for (let i = 0; i < N_NEURONS && i < ordered.length; i++) {
-      const idx = ordered[i];
-      circuitAtlasIndices[i] = idx;
-      activeCoords[i * 3 + 0] = maleCnsPositions[idx * 3 + 0];
-      activeCoords[i * 3 + 1] = maleCnsPositions[idx * 3 + 1];
-      activeCoords[i * 3 + 2] = maleCnsPositions[idx * 3 + 2];
+    // deterministic block→lobe mapping: sort lobes by x, then z, then y
+    const order = [0, 1, 2, 3, 4].sort((a, b) => {
+      const pa = centers[a] * 3, pb = centers[b] * 3;
+      const ax = maleCnsPositions[pa], bx = maleCnsPositions[pb];
+      if (ax !== bx) return ax - bx;
+      const az = maleCnsPositions[pa + 2], bz = maleCnsPositions[pb + 2];
+      if (az !== bz) return az - bz;
+      return maleCnsPositions[pa + 1] - maleCnsPositions[pb + 1];
+    });
 
-      if      (i < 128) neuronRegions[i] = 0; // AL
-      else if (i < 768) neuronRegions[i] = 1; // KC
-      else if (i < 896) neuronRegions[i] = 2; // CX
-      else if (i < 960) neuronRegions[i] = 3; // DAN
-      else              neuronRegions[i] = 4; // MBON
+    // each block takes the n nearest *unused* somata to its lobe seed
+    const used = new Uint8Array(nC);
+    let neuron = 0;
+    for (let b = 0; b < 5; b++) {
+      const seedIdx = centers[order[b]] * 3;
+      const sx0 = maleCnsPositions[seedIdx],
+            sy0 = maleCnsPositions[seedIdx + 1],
+            sz0 = maleCnsPositions[seedIdx + 2];
+      const ranked = [];
+      for (let c = 0; c < nC; c++) {
+        if (used[c]) continue;
+        const k = central[c] * 3;
+        ranked.push([(maleCnsPositions[k] - sx0) ** 2
+                   + (maleCnsPositions[k + 1] - sy0) ** 2
+                   + (maleCnsPositions[k + 2] - sz0) ** 2, c]);
+      }
+      ranked.sort((u, v) => u[0] - v[0]);
+      const want = Math.min(BLOCK_SIZES[b], ranked.length);
+      // Sample evenly across every soma inside a lobe-sized radius instead of
+      // taking the nearest n. The n nearest form a point-like ball; spreading
+      // the picks over ~0.4 brain units gives a lobe with visible extent.
+      const R2 = 0.40 * 0.40;
+      let pool = ranked.filter(r => r[0] <= R2);
+      if (pool.length < want) pool = ranked.slice(0, Math.min(ranked.length, want * 3));
+      const step = pool.length > want && want > 1 ? (pool.length - 1) / (want - 1) : 1;
+      for (let q = 0; q < want; q++) {
+        const entry = pool[Math.min(pool.length - 1, Math.round(q * step))];
+        const c = entry[1];
+        used[c] = 1;
+        const idx = central[c];
+        circuitAtlasIndices[neuron] = idx;
+        activeCoords[neuron * 3 + 0] = maleCnsPositions[idx * 3 + 0];
+        activeCoords[neuron * 3 + 1] = maleCnsPositions[idx * 3 + 1];
+        activeCoords[neuron * 3 + 2] = maleCnsPositions[idx * 3 + 2];
+        neuronRegions[neuron] = b;
+        neuron++;
+      }
+    }
+    // safety net if the atlas was short (falls back to the last placed soma)
+    for (; neuron < N_NEURONS; neuron++) {
+      neuronRegions[neuron] = neuron < 128 ? 0 : neuron < 768 ? 1 : neuron < 896 ? 2 : neuron < 960 ? 3 : 4;
     }
   } else {
     for (let i = 0; i < N_NEURONS; i++) {
@@ -1101,6 +1219,7 @@ async function initThree() {
   threeScene.add(p2);
 
   await loadMaleCnsAtlas();
+  await loadConnectomeEdges();
   generateEmbeddedAgentPositions();
   buildAgentSomas();
   threeRenderer.setAnimationLoop(threeAnimate);
@@ -1136,8 +1255,8 @@ function buildAgentSomas() {
     colors[i * 3 + 0] = baseCol.r;
     colors[i * 3 + 1] = baseCol.g;
     colors[i * 3 + 2] = baseCol.b;
-    sizes[i] = 1.6;   // resting pinpoint dot
-    alphas[i] = 0.22; // resting dim opacity
+    sizes[i] = 2.0;   // resting pinpoint dot
+    alphas[i] = 0.55; // resting dim opacity
   }
 
   geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -1185,12 +1304,46 @@ function buildAgentSomas() {
   });
 
   instancedMesh = new THREE.Points(geom, mat);
+  instancedMesh.renderOrder = 2;
   threeScene.add(instancedMesh);
 
   if (showTracts) buildSynapticLines();
 }
 
-/* ── Build Bundled Neuropil Fascicles ── */
+/* ── Fetch the real FlyWire-derived synapse list ──
+   1024×1024 matrix, 59,445 non-zero synapses, exported by the server as
+   float32 (src, tgt, |w|) triples, strongest first. */
+async function loadConnectomeEdges() {
+  try {
+    const r = await fetch(`${API}/connectome_edges.bin?top=${SYNAPSE_TOP}`);
+    if (!r.ok) throw new Error(`edges HTTP ${r.status}`);
+    const raw = new Float32Array(await r.arrayBuffer());
+    const n = Math.floor(raw.length / 3);
+    if (!n) throw new Error('empty edge list');
+    const src = new Uint16Array(n), tgt = new Uint16Array(n), w = new Float32Array(n);
+    let wMax = 0, wMin = Infinity;
+    for (let e = 0; e < n; e++) {
+      src[e] = raw[e * 3];
+      tgt[e] = raw[e * 3 + 1];
+      w[e] = raw[e * 3 + 2];
+      if (w[e] > wMax) wMax = w[e];
+      if (w[e] < wMin) wMin = w[e];
+    }
+    connectomeEdges = { n, src, tgt, w, wMin, wMax };
+    synapseGlow = new Float32Array(n);
+    synapseTotal = Number(r.headers.get('X-Total-Edges')) || n;
+    const note = $('synapse-note');
+    if (note) {
+      note.textContent = `${n.toLocaleString()} of ${synapseTotal.toLocaleString()} FlyWire synapses (strongest |w|) · 5 structural blocks, spatially localized`;
+    }
+    console.log(`Connectome: ${n} of ${synapseTotal} synapses drawn`);
+  } catch (err) {
+    console.warn('Could not load connectome edges — drawing anatomy only:', err);
+    connectomeEdges = null;
+  }
+}
+
+/* ── Draw the real synapse layer (source-coloured, strength-weighted) ── */
 function buildSynapticLines() {
   if (synapseLines) {
     threeScene.remove(synapseLines);
@@ -1199,50 +1352,97 @@ function buildSynapticLines() {
     synapseLines = null;
   }
 
-  if (!showTracts) return;
+  if (!showTracts || !connectomeEdges) return;
 
-  const nPairs = synapticPairs.length;
-  const linePositions = new Float32Array(nPairs * 6);
-  const lineColors    = new Float32Array(nPairs * 6);
+  const { n, src, tgt, w } = connectomeEdges;
+  const span = Math.max(1e-6, connectomeEdges.wMax - connectomeEdges.wMin);
+  const SEG = 4;                       // quadratic curve pieces per synapse
+  const verts = n * SEG * 2;
+  const pos   = new Float32Array(verts * 3);
+  const col   = new Float32Array(verts * 3);
+  const alpha = new Float32Array(verts);
 
-  for (let p = 0; p < nPairs; p++) {
-    const [src, tgt] = synapticPairs[p];
-    const off = p * 6;
+  let v = 0;
+  for (let e = 0; e < n; e++) {
+    const s = src[e], t = tgt[e];
+    const ax = activeCoords[s * 3], ay = activeCoords[s * 3 + 1], az = activeCoords[s * 3 + 2];
+    const bx = activeCoords[t * 3], by = activeCoords[t * 3 + 1], bz = activeCoords[t * 3 + 2];
+    // bow the tract slightly away from the brain centre so bundles read as
+    // curved fascicles rather than straight chords through the volume
+    const mx = (ax + bx) * 0.5, my = (ay + by) * 0.5, mz = (az + bz) * 0.5;
+    const cx = mx * 1.18, cy = my * 1.18, cz = mz * 1.18;
 
-    linePositions[off + 0] = activeCoords[src * 3 + 0];
-    linePositions[off + 1] = activeCoords[src * 3 + 1];
-    linePositions[off + 2] = activeCoords[src * 3 + 2];
+    const c0 = REGION_COLORS[neuronRegions[s]] || REGION_COLORS[0];
+    const c1 = REGION_COLORS[neuronRegions[t]] || REGION_COLORS[0];
+    const a = 0.008 + 0.040 * ((w[e] - connectomeEdges.wMin) / span);
 
-    linePositions[off + 3] = activeCoords[tgt * 3 + 0];
-    linePositions[off + 4] = activeCoords[tgt * 3 + 1];
-    linePositions[off + 5] = activeCoords[tgt * 3 + 2];
-
-    const srcCol = REGION_COLORS[neuronRegions[src]];
-    const tgtCol = REGION_COLORS[neuronRegions[tgt]];
-
-    lineColors[off + 0] = srcCol.r;
-    lineColors[off + 1] = srcCol.g;
-    lineColors[off + 2] = srcCol.b;
-
-    lineColors[off + 3] = tgtCol.r;
-    lineColors[off + 4] = tgtCol.g;
-    lineColors[off + 5] = tgtCol.b;
+    for (let p = 0; p < SEG; p++) {
+      for (let k = 0; k < 2; k++) {
+        const u = (p + k) / SEG, iu = 1 - u;
+        pos[v * 3]     = iu * iu * ax + 2 * iu * u * cx + u * u * bx;
+        pos[v * 3 + 1] = iu * iu * ay + 2 * iu * u * cy + u * u * by;
+        pos[v * 3 + 2] = iu * iu * az + 2 * iu * u * cz + u * u * bz;
+        col[v * 3]     = c0.r + (c1.r - c0.r) * u;
+        col[v * 3 + 1] = c0.g + (c1.g - c0.g) * u;
+        col[v * 3 + 2] = c0.b + (c1.b - c0.b) * u;
+        alpha[v] = a;
+        v++;
+      }
+    }
   }
 
-  const lineGeom = new THREE.BufferGeometry();
-  lineGeom.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-  lineGeom.setAttribute('color', new THREE.BufferAttribute(lineColors, 3));
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geom.setAttribute('edgeAlpha', new THREE.BufferAttribute(alpha, 1));
 
-  const lineMat = new THREE.LineBasicMaterial({
-    vertexColors: true,
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: `
+      attribute vec3 color;
+      attribute float edgeAlpha;
+      varying vec3 vColor;
+      varying float vAlpha;
+      void main() {
+        vColor = color;
+        vAlpha = edgeAlpha;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+      void main() { gl_FragColor = vec4(vColor, vAlpha); }
+    `,
     transparent: true,
-    opacity: 0.35,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
   });
 
-  synapseLines = new THREE.LineSegments(lineGeom, lineMat);
+  synapseLines = new THREE.LineSegments(geom, mat);
+  synapseLines.frustumCulled = false;
+  synapseLines.renderOrder = -1;   // draw wires under the neuron dots
   threeScene.add(synapseLines);
+}
+
+/* ── Pulse the wires whose source neuron fired this step ── */
+function updateSynapseGlow(spikes) {
+  if (!synapseLines || !connectomeEdges || !synapseGlow) return;
+  const { n, src, w } = connectomeEdges;
+  const attr = synapseLines.geometry.getAttribute('edgeAlpha');
+  const arr = attr.array;
+  const span = Math.max(1e-6, connectomeEdges.wMax - connectomeEdges.wMin);
+  const SEG = 4, per = SEG * 2;
+
+  for (let e = 0; e < n; e++) {
+    let g = synapseGlow[e] * 0.7;
+    if (spikes && spikes[src[e]] > 0) g = 1.0;
+    synapseGlow[e] = g;
+    const base = 0.008 + 0.040 * ((w[e] - connectomeEdges.wMin) / span);
+    const a = base + 0.22 * g;
+    const off = e * per;
+    for (let k = 0; k < per; k++) arr[off + k] = a;
+  }
+  attr.needsUpdate = true;
 }
 
 /* ── Live Neural Activity Update Loop ── */
@@ -1320,9 +1520,9 @@ function updateBrainViz(spikes, dopamine) {
             colArr[i * 3 + 0] = 1.0; colArr[i * 3 + 1] = 0.2; colArr[i * 3 + 2] = 0.3;
           }
         } else {
-          // Resting: tiny subtle dot
-          sizeArr[i] = 1.6;
-          alphaArr[i] = 0.22;
+          // Resting: small crisp dot, still brighter than the wire haze
+          sizeArr[i] = 2.0;
+          alphaArr[i] = 0.55;
           colArr[i * 3 + 0] = baseCol.r;
           colArr[i * 3 + 1] = baseCol.g;
           colArr[i * 3 + 2] = baseCol.b;
@@ -1379,7 +1579,7 @@ function setupOrbitControls(wrap) {
   $('toggle-tracts-btn')?.addEventListener('click', () => {
     showTracts = !showTracts;
     const btn = $('toggle-tracts-btn');
-    if (btn) btn.textContent = showTracts ? '⚡ Tracts: ON' : '⚡ Tracts: OFF';
+    if (btn) btn.textContent = showTracts ? '🔗 Synapses: ON' : '🔗 Synapses: OFF';
     buildSynapticLines();
   });
 }
@@ -2517,7 +2717,7 @@ $('view-mode').addEventListener('change', e => {
     if (brainShellMesh) brainShellMesh.visible = true;
   }
   const tractBtn = $('toggle-tracts-btn');
-  if (tractBtn) tractBtn.textContent = showTracts ? '⚡ Tracts: ON' : '⚡ Tracts: OFF';
+  if (tractBtn) tractBtn.textContent = showTracts ? '🔗 Synapses: ON' : '🔗 Synapses: OFF';
   buildSynapticLines();
   updateBrainViz(spikeData1024, currentDopamine);
 });

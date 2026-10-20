@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=16" />
+  <link rel="stylesheet" href="/static/style.css?v=21" />
 </head>
 <body>
 
@@ -299,9 +299,9 @@
         <div class="brain-controls">
           <label>View:</label>
           <select id="view-mode">
-            <option value="biological" selected>🔬 Real MaleCNS Brain (124k Somata)</option>
-            <option value="connectome">🧠 Connectome + Real Anatomy</option>
-            <option value="tracts">⚡ Bundled Fascicles &amp; Tracts</option>
+            <option value="biological">🔬 Real MaleCNS Brain (124k Somata)</option>
+            <option value="connectome" selected>🔗 Connectome: Real Synapses + Anatomy</option>
+            <option value="tracts">⚡ Synapses Only</option>
             <option value="circuit">🎯 <span data-neuron-count="1024">1,024-LIF</span> Agent Circuit</option>
           </select>
           <label style="margin-left:.5rem">Palette:</label>
@@ -311,8 +311,9 @@
             <option value="blue">Ice Synapse</option>
             <option value="matrix">Matrix Neuro</option>
           </select>
-          <button id="toggle-tracts-btn" class="cam-btn" title="Toggle synaptic tracts">⚡ Tracts: OFF</button>
+          <button id="toggle-tracts-btn" class="cam-btn" title="Toggle the FlyWire synapse layer">🔗 Synapses: ON</button>
           <button id="recenter-cam-btn" class="cam-btn" title="Reset to frontal view">⌖ Frontal View</button>
+          <span class="synapse-note" id="synapse-note">FlyWire synapses · 5 structural blocks, spatially localized</span>
         </div>
       </div>
 
@@ -685,6 +686,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=16"></script>
+  <script src="/static/script.js?v=21"></script>
 </body>
 </html>

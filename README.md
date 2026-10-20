@@ -1113,6 +1113,34 @@ This writes source‑file SHA‑256 hashes, parameters and nnz alongside the mat
 | DAN  |  64 | Reward prediction |
 | MBON |  64 | Action valence → read‑out |
 
+### What the 3‑D view actually draws (2026‑10)
+
+The dashboard's brain had two honesty problems that looked like "detached
+parts", and both are now fixed:
+
+1. **No wires.** `synapticPairs` was declared and never filled, so the
+   *Tracts* toggle built a `LineSegments` with 0 vertices — the anatomy was
+   real, but nothing connected it. The view now renders the model's actual
+   matrix (`brain.simulator.W_dense`, 58,421 non‑self synapses) via
+   `GET /connectome_edges.bin?top=N`, which returns float32
+   `(source, target, |w|)` triples, strongest first. The default 3,000
+   strongest are drawn as curved tracts, coloured by source block and pulsed
+   brighter for one decay when their source neuron fires.
+2. **Scattered blocks.** The five blocks were filled with the *first* central‑
+   brain somata in file order, which are spatially random: only **42.2 %** of
+   each neuron's 10 nearest neighbours were in its own block, versus **43.0 %**
+   expected by chance. The blocks are now seeded by farthest‑point sampling and
+   refined with Lloyd iterations on the real somata, then filled with evenly
+   sampled somata inside a 0.40‑unit radius: **100 %** 10‑NN purity with the
+   same 128/640/128/64/64 counts, so each colour is one visible lobe.
+
+Both are display choices, not biology: the positions are measured MaleCNS
+somata (`fly_connectome/public/data/brain-atlas`, CC BY 4.0) and the edges are
+real, but the **block names remain structural** (see the table above and
+`cell_type_verified: False`). The atlas manifest is explicit that it contains
+"somata only, not neurites or the synaptic connectivity graph" — the wiring
+comes from the model's FlyWire‑derived `W`, not from the atlas.
+
 ### Read‑out: what the policy actually sees
 The spiking network is a **frozen** feature extractor; only the read‑out
 (`feature_encoder` → `actor`/`critic`) is trained. Two properties are essential
