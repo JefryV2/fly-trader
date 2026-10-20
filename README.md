@@ -1170,6 +1170,19 @@ budget make this a pilot, not a headline, but a 0.7 % validation edge that
 turns into a 5.5 pp loss is exactly the kind of noise a bigger read‑out is
 more likely to fit.
 
+Where extra capacity *does* matter is sample size, not neurons. Pooling 10
+tickers (~27,300 observations) lifts the same 5‑day ridge probe from r=+0.06
+on 723 AAPL rows to **+0.31 from MBON alone** and +0.39 with the sensory block
+(null95 0.11–0.12) — so the fly's representation does carry signal once there
+is enough data to fit the read‑out. But 4,096 neurons still does not beat 1,024:
+ridge +0.382 versus +0.386, MBON‑only +0.281 versus +0.308, MLP +0.359 versus
++0.369. All ten tickers share the 2022–2025 test window, so this is one market
+regime, not ten independent confirmations. A larger brain is the right lever for
+a *different* problem: many more parallel streams than the 64‑dim MBON / 8‑dim
+cross‑section read‑out can carry, a brain that keeps temporal state (this one is
+stateless per observation), or anatomical fidelity rather than P&L. Reproduce
+with `python scripts/probe_scaling.py`.
+
 Parallelism is a different axis. Extra neurons add per‑step cost (0.49 ms/obs
 at 1,024, 1.59 ms at 4,096) and run nothing concurrently. What does help is
 settling B independent observations through the same `W` as one `(N, B)`
