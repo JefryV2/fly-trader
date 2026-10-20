@@ -1141,6 +1141,45 @@ real, but the **block names remain structural** (see the table above and
 "somata only, not neurites or the synaptic connectivity graph" — the wiring
 comes from the model's FlyWire‑derived `W`, not from the atlas.
 
+### Neuron count: 1,024 vs 4,096 (2026‑10)
+
+The MaleCNS atlas has 140,024 measured somata and the raw FlyWire export has
+138,639 neurons, so 1,024 is a choice, not a limit. It was kept because extra
+neurons do not buy extra *usable* signal:
+
+| model | synapses | encode | MBON dims | MBON eff. rank | 5‑day linear probe (test r) |
+|-------|---------:|-------:|----------:|---------------:|----------------------------:|
+| shipped 1,024 (pinned) | 59,445 | 0.68 ms | 64 | 17.2 | +0.061 (null 0.196) |
+| 4,096 random rows | 12,851 | 0.41 ms | 256 | 15.4 | −0.098 (null 0.227) |
+| 4,096 degree core | 400,700 | 1.61 ms | 256 | 10.9 | −0.020 (null 0.227) |
+
+The probe is a time‑ordered ridge from MBON rates to the next 5‑day return
+(502 train / 216 test observations, no shuffle). None of the sizes clears the
+multiple‑comparison null, and the effective rank does not grow with neuron
+count — the frozen read‑out is the bottleneck, not the population size.
+Compute is not the constraint either: 400k synapses still encode in 1.6 ms per
+observation.
+
+A matched‑budget A/B (10 tickers, 20 cross‑section episodes, seed 0, same plan)
+points the same way: the 1,024 agent never beat buy & hold on validation (best
+val excess −0.13 %), so the guard shipped the buy & hold prior (test 28.21 %,
+identical to the benchmark); the 4,096 agent did clear the threshold by
++0.72 % on validation and then lost **5.51 pp** out of sample (22.69 % versus
+28.21 %), trading 6–33 times per ticker instead of once. One seed and a short
+budget make this a pilot, not a headline, but a 0.7 % validation edge that
+turns into a 5.5 pp loss is exactly the kind of noise a bigger read‑out is
+more likely to fit.
+
+Reproducibility: the deployed circuit is a **pinned row selection**
+(`flywire_weights/connectome_selection_1024.json`), not rows 0..1023. File
+order yields **1,130** synapses; the pinned selection yields **58,421**.
+`connectome_selection_4096.json` pins a degree‑ranked core (400,700 synapses).
+`scripts/rebuild_connectome.py` uses the matching file automatically and records
+its sha256 in the cache provenance. The selection reproduces the *edge set*
+exactly; the original artifact's weight scaling was never recorded, so a
+rebuild is auditable but not bit‑identical (on AAPL the rebuilt 1,024 matrix
+spikes at ≈21 % of neurons per observation versus 15.5 % for the shipped one).
+
 ### Read‑out: what the policy actually sees
 The spiking network is a **frozen** feature extractor; only the read‑out
 (`feature_encoder` → `actor`/`critic`) is trained. Two properties are essential

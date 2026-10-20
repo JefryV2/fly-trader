@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import pickle
+import json
 import requests
 import os
 import gzip
@@ -87,7 +88,8 @@ def download_flywire_data(save_dir="flywire_data"):
     
     return comp_path, conn_path
 def build_sparse_weights_from_connectome(comp_path, conn_path, target_neurons=1024,
-                                         clip=0.45, normalize="degree", reciprocal_scale=0.0):
+                                         clip=0.45, normalize="degree", reciprocal_scale=0.0,
+                                         selection=None):
     """
     Build a sparse (target_neurons x target_neurons) weight matrix from FlyWire
     v783 data.
@@ -138,14 +140,29 @@ def build_sparse_weights_from_connectome(comp_path, conn_path, target_neurons=10
     }
     sizes["MBON"] = N - sum(sizes.values())
 
-    rows, offset = [], 0
-    for name in ("AL", "KC", "CX", "DAN", "MBON"):
-        count = min(sizes[name], max(0, n_avail - offset))
-        rows.extend(range(offset, offset + count))
-        offset += count
-    rows = rows[:N]
+    if selection is not None:
+        # A pinned row list (e.g. the shipped dense circuit, or a degree-ranked
+        # core). This is what makes a cached matrix reproducible: file order is
+        # arbitrary and yields a nearly disconnected graph (~1.1k synapses at
+        # N=1024, versus 58.4k for the shipped selection).
+        rows = [int(r) for r in selection]
+        if len(rows) != N:
+            raise ValueError(f"selection has {len(rows)} rows, expected {N}")
+        if min(rows) < 0 or max(rows) >= n_avail:
+            raise ValueError(f"selection rows must be in [0, {n_avail})")
+        if len(set(rows)) != len(rows):
+            raise ValueError("selection contains duplicate rows")
+        selection_mode = "pinned"
+    else:
+        rows, offset = [], 0
+        for name in ("AL", "KC", "CX", "DAN", "MBON"):
+            count = min(sizes[name], max(0, n_avail - offset))
+            rows.extend(range(offset, offset + count))
+            offset += count
+        rows = rows[:N]
+        selection_mode = "file_order"
     row2model = {r: k for k, r in enumerate(rows)}
-    print(f"  Selected {len(rows)} rows | " +
+    print(f"  Selected {len(rows)} rows ({selection_mode}) | " +
           ", ".join(f"{k}:{v}" for k, v in sizes.items()))
 
     cols = ["Presynaptic_Index", "Postsynaptic_Index", "Excitatory x Connectivity"]
@@ -189,6 +206,9 @@ def build_sparse_weights_from_connectome(comp_path, conn_path, target_neurons=10
             Path(conn_path).name: _sha256(conn_path),
         },
         "target_neurons": N,
+        "selection_mode": selection_mode,
+        "selection_rows_sha256": __import__("hashlib").sha256(
+            ",".join(map(str, rows)).encode()).hexdigest(),
         "synapses_within_selection": n_syn,
         "nnz": int(W.nnz),
         "clip": clip,
@@ -238,11 +258,11 @@ def init_weights_from_connectome(target_shape=(1024, 1024), rng=None):
     np.clip(W, -0.6, 0.6, out=W)
     
     return W
-def try_load_connectome_weights(weight_dir="flywire_weights"):
+def try_load_connectome_weights(weight_dir="flywire_weights", name="connectome_weights.pkl"):
     """
     Try to load pre-built connectome weights from cache.
     """
-    weight_path = Path(weight_dir) / "connectome_weights.pkl"
+    weight_path = Path(weight_dir) / name
     if weight_path.exists():
         try:
             print(f"Loading cached connectome weights from {weight_path}")
@@ -252,19 +272,43 @@ def try_load_connectome_weights(weight_dir="flywire_weights"):
         except Exception as e:
             print(f"Failed to load cached weights: {e}")
     return None
-def save_connectome_weights(data, weight_dir="flywire_weights"):
+
+
+def save_connectome_weights(data, weight_dir="flywire_weights", name="connectome_weights.pkl"):
     """
     Save connectome weights to cache for future use.
     """
-    weight_path = Path(weight_dir) / "connectome_weights.pkl"
+    weight_path = Path(weight_dir) / name
     weight_path.parent.mkdir(exist_ok=True)
-    
+
     try:
         with open(weight_path, 'wb') as f:
             pickle.dump(data, f)
         print(f"Saved connectome weights to {weight_path}")
     except Exception as e:
         print(f"Failed to save connectome weights: {e}")
+
+
+def load_connectome_selection(weight_dir="flywire_weights", n_neurons=1024):
+    """Return a pinned row selection for ``n_neurons``, or None.
+
+    Looks for ``connectome_selection_<N>.json`` (a JSON array of row indices
+    into the completeness CSV).  Pinning the selection is what makes a rebuild
+    reproducible; the shipped 1,024 circuit is pinned this way.
+    """
+    path = Path(weight_dir) / f"connectome_selection_{int(n_neurons)}.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        rows = payload["rows"] if isinstance(payload, dict) else payload
+        rows = [int(r) for r in rows]
+        print(f"Loaded pinned selection from {path} ({len(rows)} rows)")
+        return rows
+    except Exception as e:
+        print(f"Failed to load selection {path}: {e}")
+        return None
 # ── Spiking MaleCNS Connectome Simulator ────────────────────────────────────
 class MaleCNS1024Simulator:
     """
@@ -366,14 +410,20 @@ class MaleCNS1024Simulator:
     
     def _build_connectome_weights(self, connectome_dir, weight_cache, rng):
         """Try to load real connectome weights, fallback to random if unavailable."""
-        # Check for cached weights first
-        cached = try_load_connectome_weights(weight_cache)
+        # Size-specific cache first, then the legacy 1,024 file.
+        cache_name = f"connectome_weights_{self.N_NEURONS}.pkl"
+        cached = try_load_connectome_weights(weight_cache, cache_name)
+        if cached is None and self.N_NEURONS == 1024:
+            cached = try_load_connectome_weights(weight_cache, "connectome_weights.pkl")
         if cached is not None and cached.get('W') is not None:
             W = cached['W']
             shape = getattr(W, 'shape', None)
             if shape == (self.N_NEURONS, self.N_NEURONS):
-                if 'provenance' in cached or (cached.get('mapping') or {}).get('provenance'):
-                    print("Using cached connectome weights (provenance recorded)")
+                provenance = cached.get('provenance') or (cached.get('mapping') or {}).get('provenance')
+                if provenance:
+                    print("Using cached connectome weights (provenance recorded: "
+                          f"{provenance.get('selection_mode', 'file_order')}, "
+                          f"nnz={provenance.get('nnz')})")
                 else:
                     print("WARNING: using cached connectome weights with UNVERIFIED provenance "
                           f"({weight_cache}/connectome_weights.pkl). Regenerate with "
@@ -386,14 +436,19 @@ class MaleCNS1024Simulator:
         conn_path = Path(connectome_dir) / "2025_Connectivity_783.parquet"
         if comp_path.exists() and conn_path.exists():
             try:
+                selection = load_connectome_selection(weight_cache, self.N_NEURONS)
                 W, mapping = build_sparse_weights_from_connectome(
-                    str(comp_path), str(conn_path), target_neurons=self.N_NEURONS
+                    str(comp_path), str(conn_path), target_neurons=self.N_NEURONS,
+                    selection=selection,
                 )
                 if W is not None:
-                    save_connectome_weights(
-                        {'W': W, 'mapping': mapping, 'provenance': mapping.get('provenance')},
-                        weight_cache,
-                    )
+                    payload = {
+                        'W': W,
+                        'mapping': mapping,
+                        'provenance': mapping.get('provenance'),
+                        'neurons': list(mapping['row_to_model'].keys()),
+                    }
+                    save_connectome_weights(payload, weight_cache, cache_name)
                     return W
             except Exception as e:
                 print(f"Failed to build connectome weights: {e}")
@@ -403,14 +458,19 @@ class MaleCNS1024Simulator:
         comp_path, conn_path = download_flywire_data(connectome_dir)
         if comp_path and conn_path:
             try:
+                selection = load_connectome_selection(weight_cache, self.N_NEURONS)
                 W, mapping = build_sparse_weights_from_connectome(
-                    str(comp_path), str(conn_path), target_neurons=self.N_NEURONS
+                    str(comp_path), str(conn_path), target_neurons=self.N_NEURONS,
+                    selection=selection,
                 )
                 if W is not None:
-                    save_connectome_weights(
-                        {'W': W, 'mapping': mapping, 'provenance': mapping.get('provenance')},
-                        weight_cache,
-                    )
+                    payload = {
+                        'W': W,
+                        'mapping': mapping,
+                        'provenance': mapping.get('provenance'),
+                        'neurons': list(mapping['row_to_model'].keys()),
+                    }
+                    save_connectome_weights(payload, weight_cache, cache_name)
                     return W
             except Exception as e:
                 print(f"Failed to build connectome weights from downloaded data: {e}")

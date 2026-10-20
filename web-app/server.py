@@ -1460,10 +1460,13 @@ def connectome_edges(top: int = 12000):
     """
     key = "all"
     if key not in _EDGE_CACHE:
-        W = np.abs(np.asarray(brain.simulator.W_dense, dtype=np.float32))
-        np.fill_diagonal(W, 0.0)
-        src, tgt = np.nonzero(W)                      # row-major, deterministic
-        w = W[src, tgt]
+        # Iterate the sparse matrix: the dense copy is unnecessary and scales
+        # as N^2 (268 MB at 8,192 neurons).
+        W = brain.simulator.W.tocoo()
+        keep = W.row != W.col                        # drop self-loops
+        src = W.row[keep].astype(np.int32)
+        tgt = W.col[keep].astype(np.int32)
+        w = np.abs(W.data[keep]).astype(np.float32)
         order = np.argsort(-w, kind="stable")
         _EDGE_CACHE[key] = np.stack(
             [src[order], tgt[order], w[order]], axis=1).astype("<f4")
