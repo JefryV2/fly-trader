@@ -138,6 +138,7 @@ async function apiReset() {
 async function apiStep(manualAction = -1) {
   const policy = document.querySelector('input[name="policy"]:checked')?.value || 'brain';
   const learning = $('learning-toggle')?.checked ?? true;
+  const explore = $('explore-toggle')?.checked ?? false;
 
   let action = manualAction;
   if (manualAction === -1) {
@@ -156,7 +157,7 @@ async function apiStep(manualAction = -1) {
     const r = await fetch(`${API}/step`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, policy, learning })
+      body: JSON.stringify({ action, policy, learning, explore })
     });
     if (!r.ok) {
       const errText = await r.text();
@@ -790,17 +791,27 @@ function handleStepResult(d) {
 
   if (d.done) {
     if (autoPilot) {
-      // Auto-loop: reset and continue learning!
-      toast('🔄 Episode done — auto-looping for continued learning…', '');
-      // We return true to signal done so scheduleNext won't double-schedule
-      setTimeout(async () => {
-        if (autoPilot) {
-          await apiReset();
-          scheduleNext();
-        }
-      }, 800);
+      const exploring = d.mode === 'portfolio' && d.deterministic === false;
+      // Portfolio replay is deterministic by design: resetting would walk the
+      // exact same window and checkpoint to the exact same return. Looping it
+      // looks like a stuck result, so stop and say why; Explore samples instead.
+      if (d.mode === 'portfolio' && d.deterministic !== false) {
+        toast('Episode complete — deterministic replay: the same window and checkpoint always reproduce this exact path. Turn on Explore to vary it.', '');
+        stopAuto();
+      } else {
+        toast(exploring
+          ? '🔄 Episode done — exploring, auto-looping…'
+          : '🔄 Episode done — auto-looping for continued learning…', '');
+        // We return true to signal done so scheduleNext won't double-schedule
+        setTimeout(async () => {
+          if (autoPilot) {
+            await apiReset();
+            scheduleNext();
+          }
+        }, 800);
+      }
     } else {
-      toast('🏁 Episode complete! Press Auto-Pilot to continue learning.', '');
+      toast('🏁 Episode complete! Press Auto-Pilot to continue.', '');
     }
   }
 }

@@ -993,6 +993,15 @@ universe, with log‑scaled equity curves and a strategy table. It reads
 `…_MIN_K`, `…_MAX_K`). If the checkpoint is missing the tab explains how to build
 it instead of failing.
 
+Live portfolio steps take the **argmax** of the fly's policy. With a fixed
+window and a fixed checkpoint that makes an episode replay to exactly the same
+return, which is deliberate: it keeps the live tab equal to the backtest. So
+Auto-Pilot **stops** at the end of a portfolio episode instead of looping an
+identical path. Tick **Explore** in the allocation pane to sample from the
+policy instead; runs then differ (and no longer match the evaluated path).
+Single-asset mode already samples (temperature 0.65) and learns online, so its
+runs vary.
+
 ### Combo Lab: which k names should the fly be allowed to trade?
 
 The **Portfolio** tab also has a Combo Lab: pick 2–12 tickers on the left,

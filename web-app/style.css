@@ -956,3 +956,10 @@ input[type=range] { accent-color: var(--accent); width: 58px; cursor: pointer; }
   color: var(--txt-dim); line-height: 1.45;
 }
 .combo-note b { color: var(--txt); }
+
+/* Portfolio: deterministic replay vs exploration */
+.pf-explore { margin-top: .55rem; font-size: var(--fs-2xs); }
+.pf-explore-note {
+  font-size: var(--fs-2xs); color: var(--txt-dim);
+  line-height: 1.35; margin: .15rem 0 0 2rem;
+}

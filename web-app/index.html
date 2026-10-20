@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=22" />
+  <link rel="stylesheet" href="/static/style.css?v=23" />
 </head>
 <body>
 
@@ -292,6 +292,12 @@
             </div>
             <div class="delib-stack" id="pf-delib-stack"></div>
             <div class="delib-legend pf" id="pf-delib-legend"></div>
+            <label class="switch-row pf-explore" title="Off: deterministic replay (the path the backtest evaluates). On: sample the fly's action distribution, so each run differs.">
+              <input type="checkbox" id="explore-toggle" />
+              <span class="switch-slider"></span>
+              <span>Explore (sample actions)</span>
+            </label>
+            <div class="pf-explore-note">Off = deterministic replay: same window + checkpoint = same path.</div>
           </div>
         </div>
 
@@ -715,6 +721,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=26"></script>
+  <script src="/static/script.js?v=27"></script>
 </body>
 </html>

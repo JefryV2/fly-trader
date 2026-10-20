@@ -602,8 +602,14 @@ def _reset_live_portfolio():
         _pf_live["trades"] = []
 
 
-def _run_portfolio_step():
-    """One monthly rebalance of the multi-asset fly."""
+def _run_portfolio_step(explore: bool = False):
+    """One monthly rebalance of the multi-asset fly.
+
+    Deterministic by default: a fixed window plus a fixed checkpoint reproduces
+    exactly the same path on every replay, which is what keeps the live tab in
+    agreement with the backtest. With ``explore`` the policy samples from its
+    distribution instead of taking the argmax, so different runs diverge.
+    """
     global _pf_live
     p_env, p_agent = _live_portfolio()
     if p_env.step_i >= p_env.n_steps:
@@ -612,7 +618,8 @@ def _run_portfolio_step():
         _pf_live["trades"] = []
 
     obs = p_env.observe()
-    actions, probs, _values = p_agent.select_actions_batch(obs, deterministic=True)
+    actions, probs, _values = p_agent.select_actions_batch(
+        obs, deterministic=not explore)
     actions = np.asarray(actions, dtype=int)
     _next, rewards, done, info = p_env.step(actions)
 
@@ -675,6 +682,8 @@ def _run_portfolio_step():
         "size_pct":       None,
         "dynamic":        True,
         "mode":           "portfolio",
+        "deterministic":  not explore,
+        "explore":        bool(explore),
         "ticker":         None,
         "tickers":        list(p_env.tickers),
         "budget":         budget,
@@ -702,9 +711,9 @@ def _run_portfolio_step():
 
 
 def _dispatch_step(action: int, auto_brain: bool = False,
-                   enable_learning: bool = True):
+                   enable_learning: bool = True, explore: bool = False):
     if len(SESSION["tickers"]) > 1:
-        return _run_portfolio_step()
+        return _run_portfolio_step(explore=explore)
     return _run_step(action, auto_brain=auto_brain, enable_learning=enable_learning)
 
 
@@ -940,12 +949,14 @@ class ActionPayload(BaseModel):
     action: int = -1
     policy: str = "brain"   # "brain", "momentum", "mean_revert", "manual"
     learning: bool = False  # Disable online learning by default to prevent policy collapse
+    explore: bool = False   # Portfolio: sample instead of argmax (runs then differ)
 
 @app.post("/step")
 def take_step(payload: ActionPayload):
     auto_brain = (payload.action == -1)
     return _dispatch_step(payload.action, auto_brain=auto_brain,
-                          enable_learning=payload.learning)
+                          enable_learning=payload.learning,
+                          explore=payload.explore)
 
 
 # ── Session config: universe, budget, sizing mode ──────────────────────────
