@@ -432,6 +432,7 @@ button { color: inherit; }
 .ticker-chips::-webkit-scrollbar { width: 3px; }
 .ticker-chips::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 2px; }
 .ticker-chip {
+  display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 7px;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -442,6 +443,12 @@ button { color: inherit; }
   font-weight: 600;
   letter-spacing: .01em;
   transition: color .15s, border-color .15s, background .15s;
+}
+.ticker-chip.combo-short::after {
+  content: '';
+  width: 4px; height: 4px;
+  border: 1px solid var(--amber);
+  border-radius: 50%;
 }
 .ticker-chip:hover { color: var(--txt); border-color: var(--line-strong); background: var(--panel-2); }
 .ticker-chip.on {
@@ -1410,6 +1417,17 @@ button { color: inherit; }
   font-size: 7px; font-weight: 600; letter-spacing: .05em;
   text-transform: uppercase; color: var(--txt-dim); white-space: nowrap;
 }
+.combo-window {
+  margin: 0 0 7px;
+  font-size: 8px; line-height: 1.45; color: var(--txt-dim);
+}
+.combo-skip {
+  margin: 0 0 8px; padding: 6px 8px;
+  border-left: 2px solid var(--amber);
+  background: var(--amber-soft);
+  font-size: 8.5px; line-height: 1.5; color: var(--txt-muted);
+}
+.combo-skip b { color: var(--txt); font-weight: 600; }
 .combo-run-btn {
   flex: 1 1 92px; min-width: 0; white-space: nowrap;
   background: var(--amber); border-color: var(--amber); color: var(--bg);

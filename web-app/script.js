@@ -302,6 +302,7 @@ function applyConfigToUI(cfg) {
   applySessionMode(s.mode || 'single');
   updateUniverseHint();
   updateComboHint();
+  markComboChips();
   syncBudgetChips();
 }
 
@@ -408,6 +409,9 @@ let comboPoll = null;
 let comboFails = 0;
 let comboHasResults = false;
 let comboSelectionKey = '';
+let comboInfo = null;
+let comboUsableSet = null;
+let comboExcluded = new Map();
 const COMBO_MAX = 240;
 const COMBO_SIZE_MIN = 2;
 const COMBO_SIZE_MAX = 8;
@@ -475,6 +479,72 @@ function comboPlan(n, k) {
   return { mode: 'guided', total, seedCount: seeds, beam };
 }
 
+function comboSelectedUsable() {
+  const selected = selectedTickers();
+  return comboUsableSet ? selected.filter(t => comboUsableSet.has(t)) : selected;
+}
+
+function comboSelectedSkipped() {
+  if (!comboUsableSet) return [];
+  return selectedTickers().filter(t => !comboUsableSet.has(t));
+}
+
+function markComboChips() {
+  document.querySelectorAll('#ticker-chips .ticker-chip').forEach(btn => {
+    const ex = comboExcluded.get(btn.dataset.ticker);
+    btn.classList.toggle('combo-short', !!ex);
+    if (ex) {
+      btn.title = `${btn.dataset.ticker} is not usable in the Combo Lab: ${ex.reason}. It can still be used for a live session.`;
+    } else {
+      btn.removeAttribute('title');
+    }
+  });
+}
+
+function updateComboSkipNote() {
+  const el = $('combo-skip');
+  if (!el) return;
+  const skipped = comboSelectedSkipped();
+  if (!skipped.length) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  const names = skipped.map(t => {
+    const ex = comboExcluded.get(t);
+    const history = ex && ex.first ? `${ex.first}..${ex.last}` : 'no readable history';
+    return `${t} (${history})`;
+  }).join(', ');
+  const windowText = comboInfo && comboInfo.validation
+    ? ` The lab validates on ${comboInfo.validation.start}..${comboInfo.validation.end}; those tickers still work in a live session.`
+    : ' Those tickers still work in a live session.';
+  el.innerHTML = `<b>Skipped in the Combo Lab:</b> ${escapeHtml(names)}.${escapeHtml(windowText)}`;
+  el.hidden = false;
+}
+
+async function fetchComboMeta() {
+  try {
+    const r = await fetch(`${API}/combo_meta`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!Array.isArray(d.usable) || !Array.isArray(d.excluded)) return null;
+    comboInfo = d;
+    comboUsableSet = new Set(d.usable);
+    comboExcluded = new Map(d.excluded.map(e => [e.ticker, e]));
+    const win = $('combo-window');
+    if (win && d.validation && d.test) {
+      win.hidden = false;
+      const total = d.usable.length + d.excluded.length;
+      win.textContent = `Validation ${d.validation.start} → ${d.validation.end} · test ${d.test.start} → ${d.test.end} · ${d.usable.length}/${total} tickers usable.`;
+    }
+    markComboChips();
+    updateComboHint();
+    return d;
+  } catch {
+    return null;
+  }
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -520,7 +590,7 @@ function markComboStale() {
   const el = $('combo-stale');
   if (!el) return;
   const changed = comboHasResults && comboSelectionKey
-    && `${comboSize}:${selectedTickers().join(',')}` !== comboSelectionKey;
+    && `${comboSize}:${comboSelectedUsable().join(',')}` !== comboSelectionKey;
   el.hidden = !changed;
   el.textContent = changed
     ? 'The stock selection or basket size changed. Run the search again to refresh these results.'
@@ -536,7 +606,8 @@ function setComboEmpty(show, text) {
 
 function syncComboControls() {
   updateComboSizeUI();
-  setComboMeta(selectedTickers().length);
+  setComboMeta(comboSelectedUsable().length);
+  updateComboSkipNote();
   markComboStale();
 }
 
@@ -544,24 +615,32 @@ function updateComboHint() {
   const status = $('combo-status');
   if (!status || comboJobId) return;
   syncComboControls();
-  const n = selectedTickers().length;
+  const n = comboSelectedUsable().length;
+  const skipped = comboSelectedSkipped();
   const count = combosCount(n, comboSize);
   const noun = comboSizeNoun(comboSize);
   const plan = comboPlan(n, comboSize);
+  const usableWord = skipped.length ? 'usable ' : '';
   if (n < comboSize) {
     const need = comboSize - n;
-    setComboStatus(n === 0
-      ? `Select ${comboSize} stocks on the left.`
-      : `Select ${need} more stock${need === 1 ? '' : 's'} for ${noun}.`);
+    if (skipped.length) {
+      setComboStatus(n === 0
+        ? `Select ${comboSize} usable stocks on the left.`
+        : `${n} usable · select ${need} more ${need === 1 ? 'stock' : 'stocks'} for ${noun}.`);
+    } else {
+      setComboStatus(n === 0
+        ? `Select ${comboSize} stocks on the left.`
+        : `Select ${need} more stock${need === 1 ? '' : 's'} for ${noun}.`);
+    }
   } else if (plan.mode === 'none') {
     setComboStatus(`${plan.reason} Narrow the pool or choose a smaller basket.`, 'err');
   } else if (plan.mode === 'exhaustive') {
     const countText = count === 1
       ? `the 1 ${comboCountNoun(comboSize, count)}`
       : `all ${count.toLocaleString('en-US')} ${noun}`;
-    setComboStatus(`${n} stocks · ${countText} will be tested.`, 'ok');
+    setComboStatus(`${n} ${usableWord}stocks · ${countText} will be tested.`, 'ok');
   } else {
-    setComboStatus(`${n} stocks · ${count.toLocaleString('en-US')} possible ${comboCountNoun(comboSize, count)}. Too many to test every one, so the lab will run a guided search (~${plan.total} candidate rollouts).`);
+    setComboStatus(`${n} ${usableWord}stocks · ${count.toLocaleString('en-US')} possible ${comboCountNoun(comboSize, count)}. Too many to test every one, so the lab will run a guided search (~${plan.total} candidate rollouts).`);
   }
   const btn = $('combo-run-btn');
   if (btn && !comboJobId) btn.disabled = n < comboSize || plan.mode === 'none';
@@ -569,7 +648,7 @@ function updateComboHint() {
     const need = comboSize - n;
     let emptyText = 'Choose a basket size and run a search. The best validation basket and its unseen-data test will appear here.';
     if (n < comboSize) {
-      emptyText = `Select ${need} more stock${need === 1 ? '' : 's'} to unlock the search.`;
+      emptyText = `Select ${need} more ${usableWord}stock${need === 1 ? '' : 's'} to unlock the search.`;
     } else if (plan.mode === 'none') {
       emptyText = 'This pool is too large for the candidate budget. Select fewer stocks or a smaller basket size.';
     }
@@ -613,9 +692,16 @@ function comboPp(v) {
 
 async function runComboSearch() {
   if (comboJobId) return;
-  const tickers = selectedTickers();
+  const selected = selectedTickers();
+  const tickers = comboSelectedUsable();
   if (tickers.length < comboSize) {
-    setComboStatus(`Need ${comboSize}+ stocks in the universe.`, 'err');
+    const skipped = comboSelectedSkipped();
+    const skippedText = skipped.length
+      ? `; ${skipped.join(', ')} ${skipped.length === 1 ? 'has' : 'have'} no validation data.`
+      : '.';
+    setComboStatus(
+      `Need ${comboSize} usable stocks for ${comboSizeNoun(comboSize)}${skippedText}`,
+      'err');
     return;
   }
   const plan = comboPlan(tickers.length, comboSize);
@@ -634,6 +720,9 @@ async function runComboSearch() {
   }
   comboHasResults = false;
   comboSelectionKey = `${comboSize}:${tickers.join(',')}`;
+  // The server filters short-history names itself, but the plan preview uses
+  // only usable names so the two always agree. Send the full selection so the
+  // response can report exactly what was skipped.
   $('combo-bar-wrap').hidden = false;
   $('combo-bar').style.width = '0%';
   $('combo-best').innerHTML = '';
@@ -650,7 +739,7 @@ async function runComboSearch() {
     const r = await fetch(`${API}/combo_search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tickers, size: comboSize })
+      body: JSON.stringify({ tickers: selected, size: comboSize })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
@@ -670,7 +759,8 @@ async function runComboSearch() {
     }
     comboPoll = setTimeout(pollCombo, 400);
   } catch (e) {
-    btn.disabled = selectedTickers().length < comboSize;
+    const usable = comboSelectedUsable().length;
+    btn.disabled = usable < comboSize || comboPlan(usable, comboSize).mode === 'none';
     btn.textContent = 'Search baskets';
     if (stopBtn) stopBtn.hidden = true;
     badge.textContent = 'error';
@@ -3473,6 +3563,7 @@ async function boot() {
   initUniverseControls();
   initComboLab();
   await fetchConfig();
+  await fetchComboMeta();
   await apiReset();
   updateNeuronCountDisplay();
 // Initialize simulations button state

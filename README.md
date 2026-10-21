@@ -1031,6 +1031,10 @@ unchanged, so the triple "won" by −61 pp in a pair becoming +66 pp in a triple
 Ties now break toward the simpler basket for the same reason. Excess remains the
 honesty column — it says whether the return came from the fly or from beta.
 
+- `GET /combo_meta` reports the Combo Lab's validation/test windows and which
+  universe tickers have enough history. The card marks short-history names with
+  a dot, explains why they are skipped, and disables a run that cannot reach the
+  chosen basket size before sending a request.
 - `POST /combo_search` `{tickers, size}` starts a background job (one at a time,
   ≤240 candidate rollouts); `GET /combo_search/{id}` returns progress, the live
   leaderboard, the winner and its out-of-sample test row. The response includes
@@ -1045,10 +1049,13 @@ honesty column — it says whether the return came from the fly or from beta.
 - `test_is_ticker_holdout` distinguishes the strong case (the basket contains
   none of the 12 training tickers) from a time-only holdout.
 - The pool is filtered to tickers with at least `window_size + 2 monthly
-  rebalances` rows in the validation window. AAPL's local file only covers
-  2022-2024, so it is dropped with a visible "skipped" notice rather than
-  crashing the search; a subset that still fails is kept as a skipped row
-  instead of aborting the other 100+ combos.
+  rebalances` rows in the **cycle** validation window (2020-01-01..2021-06-30;
+  test is 2021-07-01..2024-12-31). AAPL's local file only covers 2022-2024, so
+  it is dropped with a visible "skipped" notice rather than crashing the
+  search. The universe chip is dotted to show it is unavailable *for the lab*,
+  while remaining selectable for a live single-asset session. A subset that
+  still fails is kept as a skipped row instead of aborting the other 100+
+  combos.
 
 A full run on the 10 holdout tickers (120 triples, 70 s):
 

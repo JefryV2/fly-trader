@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=34" />
+  <link rel="stylesheet" href="/static/style.css?v=35" />
 </head>
 <body>
 
@@ -586,6 +586,8 @@
             on the left. It ranks them on <b>validation</b> data, then checks the
             winner once on <b>unseen test</b> data.
           </div>
+          <div class="combo-window" id="combo-window" hidden></div>
+          <div class="combo-skip" id="combo-skip" hidden></div>
           <div class="combo-controls">
             <div class="combo-size-stepper" id="combo-sizes">
               <button type="button" class="combo-step" data-step="-1" aria-label="Decrease basket size">−</button>
@@ -824,7 +826,7 @@
               <dt>Train 25 eps</dt><dd>Runs 25 learning episodes and updates the Evolution Lab.</dd>
               <dt>Run 5 sims</dt><dd>Runs five simulated episodes and saves them for comparison.</dd>
               <dt>Lab</dt><dd>Opens the plasticity, loss, and valence telemetry.</dd>
-              <dt>Combo Lab</dt><dd>Tests groups of 2–8 stocks. Up to 240 candidate baskets are scored; larger pools use a guided beam, and very large pools ask you to narrow the selection.</dd>
+              <dt>Combo Lab</dt><dd>Tests groups of 2–8 stocks on its own validation window. Up to 240 candidate baskets are scored; larger pools use a guided beam, and very large pools ask you to narrow the selection. Stocks without enough history, such as AAPL, are skipped and marked in the universe.</dd>
               <dt>Manual trades</dt><dd>Advanced one-off buy/sell controls. They are disabled for portfolio sessions.</dd>
             </dl>
           </section>
@@ -860,6 +862,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=47"></script>
+  <script src="/static/script.js?v=50"></script>
 </body>
 </html>

@@ -1625,6 +1625,8 @@ COMBO_TRAIN_TICKERS = set(MULTI_ASSET_TICKERS)
 _COMBO_JOBS: dict[str, dict] = {}
 _COMBO_LOCK = threading.Lock()
 _COMBO_ROWS: dict[tuple, dict] = {}
+_COMBO_META: dict | None = None
+_COMBO_META_LOCK = threading.Lock()
 
 
 def _combo_key(combo, split):
@@ -1660,6 +1662,53 @@ def _combo_coverage(tickers, split):
         except Exception:
             out[t] = {"rows": 0, "first": None, "last": None}
     return out, start, end
+
+
+def _combo_meta_payload() -> dict:
+    """Coverage metadata for the Combo Lab, cached after the first request.
+
+    The dashboard uses this to disable impossible searches *before* a request
+    and to explain short-history tickers (AAPL starts in 2022, while the cycle
+    validation window starts in 2020). Live single-asset sessions are unaffected.
+    """
+    global _COMBO_META
+    if _COMBO_META is not None:
+        return _COMBO_META
+    with _COMBO_META_LOCK:
+        if _COMBO_META is not None:
+            return _COMBO_META
+        from combo_lab import MAX_SIZE
+        from config import SPLIT_PLANS, WINDOW_SIZE
+        need = WINDOW_SIZE + 2 * PORTFOLIO_REBALANCE
+        cov, val_start, val_end = _combo_coverage(AVAILABLE_TICKERS, "val")
+        test_start, test_end = SPLIT_PLANS[PORTFOLIO_PLAN]["test"]
+        usable, excluded = [], []
+        for t in AVAILABLE_TICKERS:
+            c = cov[t]
+            if c["rows"] < need:
+                covered = (f"{c['first']}..{c['last']}"
+                           if c["first"] else "no readable data")
+                excluded.append({
+                    "ticker": t,
+                    "rows": c["rows"],
+                    "first": c["first"],
+                    "last": c["last"],
+                    "reason": (f"{c['rows']} rows in the validation window "
+                               f"{val_start}..{val_end} (needs {need}); "
+                               f"history covers {covered}"),
+                })
+            else:
+                usable.append(t)
+        _COMBO_META = {
+            "plan": PORTFOLIO_PLAN,
+            "validation": {"start": val_start, "end": val_end,
+                           "rows_needed": need},
+            "test": {"start": str(test_start), "end": str(test_end)},
+            "usable": usable,
+            "excluded": excluded,
+            "max_size": MAX_SIZE,
+        }
+        return _COMBO_META
 
 
 def _combo_env(tickers, split):
@@ -1879,6 +1928,12 @@ class ComboPayload(BaseModel):
     refresh: bool = False
 
 
+@app.get("/combo_meta")
+def combo_meta():
+    """Which tickers can join the Combo Lab, and on which validation window."""
+    return _combo_meta_payload()
+
+
 @app.post("/combo_search")
 def start_combo_search(payload: ComboPayload):
     """Start a background search over ``size``-stock baskets of a universe.
@@ -1926,8 +1981,10 @@ def start_combo_search(payload: ComboPayload):
     if len(pool) < size:
         detail = "; ".join(f"{e['ticker']}: {e['reason']}" for e in excluded)
         raise HTTPException(
-            400, f"Not enough tickers with validation data for {size}-stock "
-                 f"combos. {detail}")
+            400,
+            f"Not enough usable stocks for {size}-stock combos: {len(pool)} "
+            f"have validation data (need {size}). {detail}. Choose a smaller "
+            "basket or add another usable stock.")
     plan = search_plan(len(pool), size)
     if plan["mode"] == "none":
         raise HTTPException(400, plan["reason"])
