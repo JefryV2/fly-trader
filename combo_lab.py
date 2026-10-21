@@ -19,12 +19,16 @@ optimistic by construction. The test number is the honest one.
 from __future__ import annotations
 
 from itertools import combinations
+from math import comb
 from statistics import mean, median
 
-# One dashboard request should finish in a couple of minutes. C(12, 3) = 220;
-# C(12, 4) = 495 and C(14, 3) = 364 are rejected with a message that tells the
-# user to shrink the pool or the subset size.
+# One dashboard request should finish in a couple of minutes. The exhaustive
+# path is capped at 240 scored baskets. Larger spaces use a guided beam instead
+# of being rejected: evaluate every pair, keep the strongest few, and extend
+# only those. That is how quads, fives, and larger baskets stay useful on a
+# realistic universe without a combinatorial blow-up.
 MAX_COMBOS = 240
+MAX_SIZE = 8
 
 
 def normalise_pool(pool) -> list[str]:
@@ -44,6 +48,71 @@ def combos_for(pool, size: int) -> list[tuple[str, ...]]:
     if size < 1 or size > len(pool):
         return []
     return [tuple(c) for c in combinations(pool, size)]
+
+
+def search_plan(n: int, size: int, max_combos: int = MAX_COMBOS) -> dict:
+    """Choose between an exhaustive sweep and a guided beam.
+
+    ``mode='exhaustive'`` scores every ``size``-stock subset (total is exact).
+    ``mode='guided'`` starts from all pairs, keeps the best ``beam`` baskets at
+    each size, and adds one stock at a time. Its ``total`` is an upper bound on
+    the number of rollouts. ``mode='none'`` means even the cheapest plan would
+    exceed the request budget; the reason is written for the dashboard.
+    """
+    n, size, max_combos = int(n), int(size), int(max_combos)
+    if size < 2:
+        return {"mode": "none", "size": size, "total": 0,
+                "reason": "Basket size must be at least 2."}
+    if size > n:
+        return {"mode": "none", "size": size, "total": 0,
+                "reason": f"Need at least {size} stocks; {n} selected."}
+
+    exhaustive = comb(n, size)
+    if exhaustive <= max_combos:
+        return {"mode": "exhaustive", "size": size, "total": exhaustive,
+                "seed_count": 0, "beam": None}
+
+    seeds = comb(n, 2)
+    if seeds >= max_combos:
+        return {"mode": "none", "size": size, "total": 0,
+                "reason": (f"{seeds} starting pairs are above the "
+                           f"{max_combos}-candidate limit; narrow the pool.")}
+
+    span = max(1, n - 2)
+
+    def upper_bound(beam: int) -> int:
+        return seeds + sum(beam * (n - cur) for cur in range(2, size))
+
+    beam = max(1, min(12, (max_combos - seeds) // ((size - 2) * span)))
+    total = upper_bound(beam)
+    while beam > 1 and total > max_combos:
+        beam -= 1
+        total = upper_bound(beam)
+    if total > max_combos:
+        return {"mode": "none", "size": size, "total": 0,
+                "reason": (f"A guided {size}-stock search over {n} names needs "
+                           f"up to {total} candidates, above the {max_combos} "
+                           "limit; narrow the pool.")}
+
+    return {"mode": "guided", "size": size, "total": total,
+            "seed_count": seeds, "beam": beam}
+
+
+def expand_beam(beam, pool) -> list[tuple[str, ...]]:
+    """Add one stock to each basket in ``beam``, de-duplicated and sorted."""
+    pool = normalise_pool(pool)
+    seen: set[tuple[str, ...]] = set()
+    out: list[tuple[str, ...]] = []
+    for combo in beam:
+        combo = tuple(combo)
+        for ticker in pool:
+            if ticker in combo:
+                continue
+            candidate = tuple(sorted((*combo, ticker)))
+            if candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+    return out
 
 
 def rank(results) -> list[dict]:

@@ -50,8 +50,8 @@ const qBrainBadge   = $('brain-badge');
 
 // Live session (universe / budget / sizing) and portfolio-mode colours
 let sessionMode = 'single';
-const LIVE_PF_COLORS = ['#3d8eff', '#00e5ff', '#8c52ff', '#34d399', '#ffb703',
-                        '#f87171', '#f59e0b', '#a78bfa', '#22d3ee', '#4ade80'];
+const LIVE_PF_COLORS = ['#F97316', '#FDBA74', '#FAFAFA', '#A1A1AA', '#FB923C',
+                        '#71717A', '#E4E4E7', '#D4D4D8', '#EA580C', '#8B8B94'];
 const _pfColorMap = {};
 
 // Neuropil meters
@@ -190,9 +190,16 @@ function updateUniverseHint() {
   const hint = $('uni-hint');
   if (!hint) return;
   const sel = selectedTickers();
-  hint.textContent = sel.length === 0 ? 'Pick at least one stock'
-    : sel.length === 1 ? `${sel[0]} · single-asset fly`
-    : `${sel.length} stocks · portfolio fly (monthly rebalance)`;
+  const count = $('ticker-count');
+  const total = document.querySelectorAll('#ticker-chips .ticker-chip').length;
+  if (count) count.textContent = total
+    ? `${sel.length} of ${total} selected`
+    : `${sel.length} selected`;
+  document.querySelectorAll('#ticker-chips .ticker-chip').forEach(b =>
+    b.setAttribute('aria-pressed', b.classList.contains('on') ? 'true' : 'false'));
+  hint.textContent = sel.length === 0 ? 'Pick at least one stock to begin'
+    : sel.length === 1 ? `${sel[0]} · single-stock fly`
+    : `${sel.length} stocks · portfolio fly · monthly rebalance`;
 }
 
 function syncBudgetChips() {
@@ -213,6 +220,14 @@ function applySessionMode(mode) {
     b.disabled = sessionMode !== 'single';
     b.style.opacity = sessionMode === 'single' ? '' : '.45';
   });
+  const manual = $('manual-controls');
+  if (manual) manual.classList.toggle('disabled', sessionMode !== 'single');
+  const note = $('manual-note');
+  if (note) {
+    note.textContent = sessionMode === 'single'
+      ? 'Place a one-off trade without waiting for the brain.'
+      : 'Manual trades are disabled while a portfolio is loaded.';
+  }
 }
 
 function renderPortfolioAllocation(d) {
@@ -230,7 +245,7 @@ function renderPortfolioAllocation(d) {
   parts.forEach(h => {
     if (!_pfColorMap[h.ticker]) {
       _pfColorMap[h.ticker] = h.cash
-        ? '#4b5b74'
+        ? '#52525B'
         : LIVE_PF_COLORS[Object.keys(_pfColorMap).length % LIVE_PF_COLORS.length];
     }
   });
@@ -286,6 +301,7 @@ function applyConfigToUI(cfg) {
 
   applySessionMode(s.mode || 'single');
   updateUniverseHint();
+  updateComboHint();
   syncBudgetChips();
 }
 
@@ -306,9 +322,9 @@ async function applyUniverse() {
   const status = $('uni-status');
   const tickers = selectedTickers();
   if (!tickers.length) {
-    status.textContent = 'Pick at least one stock first.';
+    status.textContent = 'Choose at least one stock first.';
     status.className = 'uni-status err';
-    return;
+    return false;
   }
   const budget = Number($('budget-input')?.value) || 100000;
   const dynamic = $('dynamic-sizing-toggle')?.checked ?? true;
@@ -332,13 +348,15 @@ async function applyUniverse() {
     applyConfigToUI(d);
     await apiReset();
     status.textContent = d.session.mode === 'portfolio'
-      ? `Applied · ${d.session.tickers.length} stocks · ${d.n_steps} monthly rebalances`
-      : `Applied · ${d.session.tickers[0]} · ${d.n_steps} steps · $${Math.round(d.session.budget).toLocaleString('en-US')}`;
+      ? `Loaded · ${d.session.tickers.length} stocks · ${d.n_steps} monthly rebalances`
+      : `Loaded · ${d.session.tickers[0]} · ${d.n_steps} steps · $${Math.round(d.session.budget).toLocaleString('en-US')}`;
     status.className = 'uni-status ok';
-    toast('Universe applied', '');
+    toast('Session loaded', '');
+    return true;
   } catch (e) {
     status.textContent = String(e.message || e);
     status.className = 'uni-status err';
+    return false;
   } finally {
     btn.disabled = false;
     btn.textContent = label;
@@ -366,6 +384,19 @@ function initUniverseControls() {
   if (bi) bi.addEventListener('input', syncBudgetChips);
   const apply = $('apply-universe-btn');
   if (apply) apply.addEventListener('click', applyUniverse);
+
+  $('select-all-tickers')?.addEventListener('click', () => {
+    document.querySelectorAll('#ticker-chips .ticker-chip')
+      .forEach(b => b.classList.add('on'));
+    updateUniverseHint();
+    updateComboHint();
+  });
+  $('clear-tickers')?.addEventListener('click', () => {
+    document.querySelectorAll('#ticker-chips .ticker-chip')
+      .forEach(b => b.classList.remove('on'));
+    updateUniverseHint();
+    updateComboHint();
+  });
 }
 
 /* ─────────────────────────────────────────────
@@ -375,13 +406,79 @@ let comboSize = 3;
 let comboJobId = null;
 let comboPoll = null;
 let comboFails = 0;
+let comboHasResults = false;
+let comboSelectionKey = '';
 const COMBO_MAX = 240;
+const COMBO_SIZE_MIN = 2;
+const COMBO_SIZE_MAX = 8;
+
+const COMBO_SIZE_LABELS = {
+  2: 'Pairs', 3: 'Triples', 4: 'Quads', 5: 'Five-stock',
+  6: 'Six-stock', 7: 'Seven-stock', 8: 'Eight-stock'
+};
+const COMBO_SIZE_NOUNS = {
+  2: 'pairs', 3: 'triples', 4: 'quads', 5: 'five-stock baskets',
+  6: 'six-stock baskets', 7: 'seven-stock baskets', 8: 'eight-stock baskets'
+};
+
+function comboSizeLabel(k) { return COMBO_SIZE_LABELS[k] || `${k}-stock`; }
+function comboSizeNoun(k) { return COMBO_SIZE_NOUNS[k] || `${k}-stock baskets`; }
+function comboCountNoun(k, count) {
+  const noun = comboSizeNoun(k);
+  return count === 1 ? noun.replace(/s$/, '') : noun;
+}
+function comboRollouts(n) {
+  return `${n} rollout${n === 1 ? '' : 's'}`;
+}
 
 function combosCount(n, k) {
   if (n < k) return 0;
   let out = 1;
   for (let i = 0; i < k; i += 1) out = (out * (n - i)) / (i + 1);
   return Math.round(out);
+}
+
+// Mirror of combo_lab.search_plan: preview the same exhaustive/guided choice
+// and the 240-candidate budget before a search is started.
+function comboPlan(n, k) {
+  if (k < 2) return { mode: 'none', total: 0, reason: 'Basket size must be at least 2.' };
+  if (n < k) return { mode: 'none', total: 0, reason: `Need at least ${k} stocks; ${n} selected.` };
+  const exhaustive = combosCount(n, k);
+  if (exhaustive <= COMBO_MAX) {
+    return { mode: 'exhaustive', total: exhaustive, seedCount: 0, beam: null };
+  }
+  const seeds = combosCount(n, 2);
+  if (seeds >= COMBO_MAX) {
+    return {
+      mode: 'none', total: 0, seedCount: seeds,
+      reason: `${seeds.toLocaleString('en-US')} starting pairs are above the ${COMBO_MAX}-candidate limit.`
+    };
+  }
+  const span = Math.max(1, n - 2);
+  const upperBound = beam => {
+    let total = seeds;
+    for (let cur = 2; cur < k; cur += 1) total += beam * (n - cur);
+    return total;
+  };
+  let beam = Math.max(1, Math.min(12, Math.floor((COMBO_MAX - seeds) / ((k - 2) * span))));
+  let total = upperBound(beam);
+  while (beam > 1 && total > COMBO_MAX) {
+    beam -= 1;
+    total = upperBound(beam);
+  }
+  if (total > COMBO_MAX) {
+    return {
+      mode: 'none', total: 0, seedCount: seeds,
+      reason: `A guided ${k}-stock search over ${n} names needs up to ${total} candidates, above the ${COMBO_MAX} limit.`
+    };
+  }
+  return { mode: 'guided', total, seedCount: seeds, beam };
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
 }
 
 function setComboStatus(text, cls = '') {
@@ -391,37 +488,115 @@ function setComboStatus(text, cls = '') {
   el.className = `uni-status${cls ? ` ${cls}` : ''}`;
 }
 
+function updateComboSizeUI() {
+  const val = $('combo-size-val');
+  const label = $('combo-size-label');
+  if (val) val.textContent = String(comboSize);
+  if (label) label.textContent = comboSizeLabel(comboSize);
+}
+
+function setComboMeta(n) {
+  const mode = $('combo-mode');
+  const count = $('combo-count');
+  const possible = combosCount(n, comboSize);
+  const plan = comboPlan(n, comboSize);
+  if (mode) {
+    const guided = plan.mode === 'guided';
+    mode.textContent = n < comboSize
+      ? 'Waiting'
+      : plan.mode === 'none' ? 'Too many' : guided ? 'Guided' : 'All combos';
+    mode.className = `combo-mode-pill${guided ? ' guided' : plan.mode === 'none' ? ' over' : ''}`;
+  }
+  if (count) {
+    count.textContent = n < comboSize
+      ? `${comboSize - n} more needed`
+      : plan.mode === 'none'
+        ? 'over budget'
+        : `${possible.toLocaleString('en-US')} ${comboCountNoun(comboSize, possible)}`;
+  }
+}
+
+function markComboStale() {
+  const el = $('combo-stale');
+  if (!el) return;
+  const changed = comboHasResults && comboSelectionKey
+    && `${comboSize}:${selectedTickers().join(',')}` !== comboSelectionKey;
+  el.hidden = !changed;
+  el.textContent = changed
+    ? 'The stock selection or basket size changed. Run the search again to refresh these results.'
+    : '';
+}
+
+function setComboEmpty(show, text) {
+  const el = $('combo-empty');
+  if (!el) return;
+  el.hidden = !show;
+  if (show && text) el.textContent = text;
+}
+
+function syncComboControls() {
+  updateComboSizeUI();
+  setComboMeta(selectedTickers().length);
+  markComboStale();
+}
+
 function updateComboHint() {
   const status = $('combo-status');
   if (!status || comboJobId) return;
+  syncComboControls();
   const n = selectedTickers().length;
-  const label = comboSize === 2 ? 'pairs' : 'triples';
   const count = combosCount(n, comboSize);
-  if (n < 2) {
-    setComboStatus('Pick at least 2 stocks on the left.');
-  } else if (n < comboSize) {
-    setComboStatus(`Pick at least ${comboSize} stocks for ${label}.`);
-  } else if (count > COMBO_MAX) {
-    setComboStatus(`${count} ${label} is above the ${COMBO_MAX} limit — pick fewer stocks or use pairs.`, 'err');
+  const noun = comboSizeNoun(comboSize);
+  const plan = comboPlan(n, comboSize);
+  if (n < comboSize) {
+    const need = comboSize - n;
+    setComboStatus(n === 0
+      ? `Select ${comboSize} stocks on the left.`
+      : `Select ${need} more stock${need === 1 ? '' : 's'} for ${noun}.`);
+  } else if (plan.mode === 'none') {
+    setComboStatus(`${plan.reason} Narrow the pool or choose a smaller basket.`, 'err');
+  } else if (plan.mode === 'exhaustive') {
+    const countText = count === 1
+      ? `the 1 ${comboCountNoun(comboSize, count)}`
+      : `all ${count.toLocaleString('en-US')} ${noun}`;
+    setComboStatus(`${n} stocks · ${countText} will be tested.`, 'ok');
   } else {
-    setComboStatus(`${n} stocks · ${count} ${label} to try.`);
+    setComboStatus(`${n} stocks · ${count.toLocaleString('en-US')} possible ${comboCountNoun(comboSize, count)}. Too many to test every one, so the lab will run a guided search (~${plan.total} candidate rollouts).`);
+  }
+  const btn = $('combo-run-btn');
+  if (btn && !comboJobId) btn.disabled = n < comboSize || plan.mode === 'none';
+  if (!comboHasResults && !comboJobId) {
+    const need = comboSize - n;
+    let emptyText = 'Choose a basket size and run a search. The best validation basket and its unseen-data test will appear here.';
+    if (n < comboSize) {
+      emptyText = `Select ${need} more stock${need === 1 ? '' : 's'} to unlock the search.`;
+    } else if (plan.mode === 'none') {
+      emptyText = 'This pool is too large for the candidate budget. Select fewer stocks or a smaller basket size.';
+    }
+    setComboEmpty(true, emptyText);
+  } else {
+    setComboEmpty(false);
   }
 }
 
 function initComboLab() {
-  document.querySelectorAll('#combo-sizes .combo-size').forEach(btn => {
+  document.querySelectorAll('#combo-sizes .combo-step').forEach(btn => {
     btn.addEventListener('click', () => {
       if (comboJobId) return;
-      comboSize = Number(btn.dataset.size) || 3;
-      document.querySelectorAll('#combo-sizes .combo-size')
-        .forEach(b => b.classList.toggle('active', b === btn));
+      const step = Number(btn.dataset.step) || 0;
+      const next = Math.min(COMBO_SIZE_MAX, Math.max(COMBO_SIZE_MIN, comboSize + step));
+      if (next === comboSize) return;
+      comboSize = next;
       updateComboHint();
     });
   });
   $('combo-run-btn')?.addEventListener('click', runComboSearch);
-  $('combo-best')?.addEventListener('click', e => {
-    const b = e.target.closest('.combo-use');
-    if (b) useCombo(b.dataset.combo || '');
+  $('combo-stop-btn')?.addEventListener('click', stopComboSearch);
+  ['combo-best', 'combo-list'].forEach(id => {
+    $(id)?.addEventListener('click', e => {
+      const b = e.target.closest('.combo-use, .combo-use-row');
+      if (b) useCombo(b.dataset.combo || '');
+    });
   });
   updateComboHint();
 }
@@ -443,21 +618,33 @@ async function runComboSearch() {
     setComboStatus(`Need ${comboSize}+ stocks in the universe.`, 'err');
     return;
   }
-  if (combosCount(tickers.length, comboSize) > COMBO_MAX) {
-    setComboStatus(`That would be ${combosCount(tickers.length, comboSize)} combos — above the ${COMBO_MAX} limit.`, 'err');
+  const plan = comboPlan(tickers.length, comboSize);
+  if (plan.mode === 'none') {
+    setComboStatus(`${plan.reason} Narrow the pool or choose a smaller basket.`, 'err');
     return;
   }
   const btn = $('combo-run-btn');
+  const stopBtn = $('combo-stop-btn');
   btn.disabled = true;
+  btn.textContent = 'Searching…';
+  if (stopBtn) {
+    stopBtn.hidden = false;
+    stopBtn.disabled = false;
+    stopBtn.textContent = 'Stop';
+  }
+  comboHasResults = false;
+  comboSelectionKey = `${comboSize}:${tickers.join(',')}`;
   $('combo-bar-wrap').hidden = false;
   $('combo-bar').style.width = '0%';
   $('combo-best').innerHTML = '';
   $('combo-list').innerHTML = '';
   $('combo-note').hidden = true;
+  setComboEmpty(false);
+  markComboStale();
   const badge = $('combo-badge');
   badge.textContent = 'starting';
   badge.className = 'combo-badge live';
-  setComboStatus('Starting the search…');
+  setComboStatus(`Starting a search for ${comboSizeNoun(comboSize)}…`);
 
   try {
     const r = await fetch(`${API}/combo_search`, {
@@ -473,13 +660,46 @@ async function runComboSearch() {
     const skippedNow = (d.excluded || []).map(e => e.ticker);
     if (skippedNow.length) {
       setComboStatus(`Skipping ${skippedNow.join(', ')}: no data in the validation window.`);
+    } else if (d.search && d.search.mode === 'guided') {
+      setComboStatus(`Guided search · up to ${comboRollouts(d.total)} · beam ${d.search.beam}. Building the starting pairs…`);
+    } else {
+      const target = d.total === 1
+        ? `the 1 ${comboCountNoun(comboSize, 1)}`
+        : `all ${d.total} ${comboSizeNoun(comboSize)}`;
+      setComboStatus(`Scoring ${target}…`);
     }
     comboPoll = setTimeout(pollCombo, 400);
   } catch (e) {
-    btn.disabled = false;
+    btn.disabled = selectedTickers().length < comboSize;
+    btn.textContent = 'Search baskets';
+    if (stopBtn) stopBtn.hidden = true;
     badge.textContent = 'error';
     badge.className = 'combo-badge err';
     setComboStatus(String(e.message || e), 'err');
+    setComboEmpty(!comboHasResults, 'The search could not start. Check the message above.');
+  }
+}
+
+async function stopComboSearch() {
+  if (!comboJobId) return;
+  const stopBtn = $('combo-stop-btn');
+  if (stopBtn) {
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping…';
+  }
+  try {
+    const r = await fetch(`${API}/combo_search/${comboJobId}/cancel`, { method: 'POST' });
+    if (!r.ok) {
+      const d = await r.json();
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    setComboStatus('Stopping after the current basket…');
+  } catch (e) {
+    if (stopBtn) {
+      stopBtn.disabled = false;
+      stopBtn.textContent = 'Stop';
+    }
+    setComboStatus(`Could not stop the search: ${e.message || e}`, 'err');
   }
 }
 
@@ -487,40 +707,72 @@ function renderCombo(d) {
   const badge = $('combo-badge');
   const total = Number(d.total) || 0;
   const done = Number(d.done) || 0;
+  const search = d.search || {};
+  const size = Number(d.size) || comboSize;
+  const noun = comboSizeNoun(size);
+  const modeText = search.mode === 'guided' ? 'Guided search' : 'All combos';
   const skipped = (d.excluded && d.excluded.length)
     ? ` · skipped ${d.excluded.map(e => e.ticker).join(', ')} (no validation data)`
     : '';
   const failed = Number(d.failed) > 0 ? ` · ${d.failed} failed` : '';
 
   if (d.status === 'done') {
+    comboHasResults = Array.isArray(d.results) && d.results.length > 0;
     badge.textContent = 'done';
     badge.className = 'combo-badge done';
     $('combo-bar').style.width = '100%';
-    setComboStatus(`Evaluated ${done} combos in ${d.elapsed_s}s · ranked on validation${skipped}${failed}.`, 'ok');
+    setComboStatus(`${modeText} · scored ${comboRollouts(done)} in ${d.elapsed_s}s · ranked on validation${skipped}${failed}.`, 'ok');
   } else if (d.status === 'error') {
+    comboHasResults = Array.isArray(d.results) && d.results.length > 0;
     badge.textContent = 'error';
     badge.className = 'combo-badge err';
     setComboStatus(`${d.error || 'Search failed'}${skipped}`, 'err');
+    if (!comboHasResults) setComboEmpty(true, 'The search did not return any baskets. Check the message above.');
+  } else if (d.status === 'cancelled') {
+    comboHasResults = Array.isArray(d.results) && d.results.length > 0;
+    badge.textContent = 'stopped';
+    badge.className = 'combo-badge err';
+    $('combo-bar').style.width = '100%';
+    setComboStatus(`Stopped after ${comboRollouts(done)}. ${comboHasResults ? 'Partial results are below.' : `No ${noun} were scored.`}`);
+    if (!comboHasResults) setComboEmpty(true, `The search was stopped before any ${noun} were scored.`);
+  } else if (d.status === 'cancelling') {
+    badge.textContent = 'stopping';
+    badge.className = 'combo-badge live';
+    setComboStatus(`Stopping after the current basket… ${done} / ${total} ${total === 1 ? 'rollout' : 'rollouts'} done.`);
+    $('combo-bar').style.width = total
+      ? `${Math.min(100, Math.round((100 * done) / total))}%` : '0%';
   } else {
+    const phase = d.phase === 'test'
+      ? 'testing the winner on unseen data'
+      : d.phase === 'seed'
+        ? 'building the starting pairs'
+        : String(d.phase || '').startsWith('extend')
+          ? `extending to ${String(d.phase).split(' ')[1]}-stock baskets`
+          : 'scoring baskets';
     badge.textContent = `${done} / ${total}`;
     badge.className = 'combo-badge live';
-    const phase = d.phase === 'test' ? ' · now running the winner on test' : '';
-    setComboStatus(`Fly evaluating combo ${done} / ${total}${phase}…${skipped}`);
-    $('combo-bar').style.width = total ? `${Math.round((100 * done) / total)}%` : '0%';
+    setComboStatus(`${modeText} · ${done} / ${total} candidate ${total === 1 ? 'rollout' : 'rollouts'} · ${phase}…${skipped}${failed}`);
+    $('combo-bar').style.width = total
+      ? `${Math.min(100, Math.round((100 * done) / total))}%` : '0%';
   }
 
   if (Array.isArray(d.results) && d.results.length) {
-    $('combo-list').innerHTML = d.results.map((r, i) => {
+    const rows = d.results.map((r, i) => {
       const ex = Number(r.excess_pct) || 0;
+      const name = (r.combo || []).join(' · ');
       return `<div class="combo-row${i === 0 ? ' best' : ''}">
         <span class="combo-rank">${i + 1}</span>
-        <span class="combo-name">${(r.combo || []).join(' · ')}</span>
+        <span class="combo-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
         <span class="combo-nums">
           <span class="combo-pos">${comboPct(r.return_pct)}</span> fly
-          <br><span class="${ex >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(ex)}</span> vs B&amp;H · Sh ${(Number(r.sharpe) || 0).toFixed(2)}
+          <br><span class="${ex >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(ex)}</span> vs B&amp;H
         </span>
+        <button type="button" class="combo-use-row" data-combo="${escapeHtml((r.combo || []).join(','))}" title="Use this basket">Use</button>
       </div>`;
     }).join('');
+    $('combo-list').innerHTML = `<div class="combo-row combo-head">
+      <span>#</span><span>Basket</span><span>Fly / vs B&amp;H</span><span></span>
+    </div>${rows}`;
   }
 
   if (d.best && d.best.test) {
@@ -528,28 +780,30 @@ function renderCombo(d) {
     const t = b.test;
     const holdout = b.test_is_ticker_holdout;
     const testLabel = `${t.start} → ${t.end} · ${holdout ? 'unseen tickers' : 'seen tickers (time only)'}`;
+    const name = (b.combo || []).join(' · ');
     $('combo-best').innerHTML = `
       <div class="combo-best">
         <div class="combo-best-head">
           <span>Validation winner</span>
-          <span class="combo-best-name">${(b.combo || []).join(' · ')}</span>
+          <span class="combo-best-name">${escapeHtml(name)}</span>
         </div>
-        <div class="combo-best-row">val: fly ${comboPct(b.return_pct)} · B&amp;H ${comboPct(b.bh_return_pct)} ·
+        <div class="combo-best-mode">${modeText} · selected on validation</div>
+        <div class="combo-best-row"><span class="combo-stage">Validation</span> Fly ${comboPct(b.return_pct)} · B&amp;H ${comboPct(b.bh_return_pct)} ·
           <b class="${b.excess_pct >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(b.excess_pct)}</b></div>
-        <div class="combo-best-row test">test (${testLabel}): fly ${comboPct(t.return_pct)} ·
-          B&amp;H ${comboPct(t.bh_return_pct)} ·
+        <div class="combo-best-row test"><span class="combo-stage">Test</span> Fly ${comboPct(t.return_pct)} · B&amp;H ${comboPct(t.bh_return_pct)} ·
           <b class="${t.excess_pct >= 0 ? 'combo-pos' : 'combo-neg'}">${comboPp(t.excess_pct)}</b>
-          · Sh ${(Number(t.sharpe) || 0).toFixed(2)}</div>
-        <button type="button" class="combo-use" data-combo="${(b.combo || []).join(',')}">Use this combo</button>
+          · Sh ${(Number(t.sharpe) || 0).toFixed(2)}<br><span class="combo-test-window">${escapeHtml(testLabel)}</span></div>
+        <button type="button" class="combo-use" data-combo="${escapeHtml((b.combo || []).join(','))}">Use this basket</button>
       </div>`;
   } else if (d.best && d.best.test_error) {
+    const name = (d.best.combo || []).join(' · ');
     $('combo-best').innerHTML = `
       <div class="combo-best">
         <div class="combo-best-head">
           <span>Validation winner</span>
-          <span class="combo-best-name">${(d.best.combo || []).join(' · ')}</span>
+          <span class="combo-best-name">${escapeHtml(name)}</span>
         </div>
-        <div class="combo-best-row test" style="color:var(--red)">test run failed: ${d.best.test_error}</div>
+        <div class="combo-best-row test" style="color:var(--red)">Test run failed: ${escapeHtml(d.best.test_error)}</div>
       </div>`;
   }
 
@@ -559,11 +813,15 @@ function renderCombo(d) {
     note.hidden = false;
     const failedNote = Number(s.failed) > 0
       ? ` ${s.failed} could not be scored.` : '';
-    note.innerHTML = `<b>${s.beat_bh} / ${s.evaluated}</b> combos beat their own
-      buy &amp; hold; median excess <b>${comboPp(s.median_excess_pct)}</b>.${failedNote}
-      Keeping the best of ${s.evaluated} is a search — the test row is the
-      honest estimate.`;
+    const possible = d.pool ? combosCount(d.pool.length, size) : null;
+    const modeNote = search.mode === 'guided'
+      ? `Guided search scored ${s.evaluated} of ${Number(possible).toLocaleString('en-US')} possible ${noun}; not every basket was tested.`
+      : `Scored ${s.evaluated === 1 ? 'the 1' : `all ${s.evaluated}`} ${comboCountNoun(size, s.evaluated)}.`;
+    note.innerHTML = `<b>${s.beat_bh} / ${s.evaluated}</b> beat their own buy &amp; hold;
+      median excess <b>${comboPp(s.median_excess_pct)}</b>.${failedNote}
+      ${modeNote} Keeping the best is a search — the test row is the honest estimate.`;
   }
+  markComboStale();
 }
 
 async function pollCombo() {
@@ -575,19 +833,32 @@ async function pollCombo() {
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
     comboFails = 0;
     renderCombo(d);
-    if (d.status === 'queued' || d.status === 'running') {
+    if (d.status === 'queued' || d.status === 'running' || d.status === 'cancelling') {
       comboPoll = setTimeout(pollCombo, 700);
     } else {
       comboPoll = null;
       comboJobId = null;
-      $('combo-run-btn').disabled = false;
+      const btn = $('combo-run-btn');
+      if (btn) {
+        btn.disabled = selectedTickers().length < comboSize;
+        btn.textContent = 'Search baskets';
+      }
+      const stopBtn = $('combo-stop-btn');
+      if (stopBtn) stopBtn.hidden = true;
+      syncComboControls();
     }
   } catch (e) {
     comboFails += 1;
     if (comboFails > 8) {
       comboPoll = null;
       comboJobId = null;
-      $('combo-run-btn').disabled = false;
+      const btn = $('combo-run-btn');
+      if (btn) {
+        btn.disabled = selectedTickers().length < comboSize;
+        btn.textContent = 'Search baskets';
+      }
+      const stopBtn = $('combo-stop-btn');
+      if (stopBtn) stopBtn.hidden = true;
       setComboStatus(`Lost the search: ${e.message || e}`, 'err');
     } else {
       comboPoll = setTimeout(pollCombo, 1500);
@@ -595,14 +866,23 @@ async function pollCombo() {
   }
 }
 
-function useCombo(csv) {
+async function useCombo(csv) {
   const picked = new Set(csv.split(',').filter(Boolean));
   if (!picked.size) return;
   document.querySelectorAll('#ticker-chips .ticker-chip')
     .forEach(b => b.classList.toggle('on', picked.has(b.dataset.ticker)));
   updateUniverseHint();
-  setComboStatus(`Applying ${[...picked].join(' · ')}…`);
-  applyUniverse();
+  setComboStatus(`Loading ${[...picked].join(' · ')}…`);
+  const ok = await applyUniverse();
+  if (ok) {
+    comboSize = Math.min(COMBO_SIZE_MAX, Math.max(COMBO_SIZE_MIN, picked.size));
+    updateComboSizeUI();
+    comboSelectionKey = `${comboSize}:${[...picked].join(',')}`;
+    updateComboHint();
+  } else {
+    setComboStatus('Could not load that basket. Check the universe and try again.', 'err');
+    markComboStale();
+  }
 }
 
 
@@ -833,9 +1113,9 @@ function updateVmLabels(vg) {
       el.textContent = `${val.toFixed(1)} mV`;
       // Color: near threshold (-55) → amber, below resting (-70) → dim
       if (val > -58) {
-        el.style.color = '#f59e0b';
+        el.style.color = '#F97316';
       } else if (val > -65) {
-        el.style.color = '#7dd3fc';
+        el.style.color = '#FDBA74';
       } else {
         el.style.color = 'var(--txt-dim)';
       }
@@ -956,11 +1236,11 @@ function drawOscilloscope() {
   ctx.clearRect(0, 0, W, H);
 
   const traces = [
-    { key: 'al',   arr: voltageHistory.al,   color: '#5fd3e6', label: 'AL' },
-    { key: 'kc',   arr: voltageHistory.kc,   color: '#a78bfa', label: 'KC' },
-    { key: 'cx',   arr: voltageHistory.cx,   color: '#f0c36b', label: 'CX' },
-    { key: 'dan',  arr: voltageHistory.dan,  color: '#ef7d93', label: 'DAN' },
-    { key: 'mbon', arr: voltageHistory.mbon, color: '#6fd9a8', label: 'MBON' },
+    { key: 'al',   arr: voltageHistory.al,   color: '#FAFAFA', label: 'AL' },
+    { key: 'kc',   arr: voltageHistory.kc,   color: '#A1A1AA', label: 'KC' },
+    { key: 'cx',   arr: voltageHistory.cx,   color: '#F97316', label: 'CX' },
+    { key: 'dan',  arr: voltageHistory.dan,  color: '#FDBA74', label: 'DAN' },
+    { key: 'mbon', arr: voltageHistory.mbon, color: '#71717A', label: 'MBON' },
   ];
 
   // Auto-range over the live samples, with a floor on the span so a quiet
@@ -983,7 +1263,7 @@ function drawOscilloscope() {
   const plotH = Math.max(10, H - padT - padB);
   const yFor = v => padT + ((hi - v) / (hi - lo)) * plotH;
 
-  ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.font = "9px 'Plus Jakarta Sans', system-ui, sans-serif";
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
 
@@ -991,17 +1271,17 @@ function drawOscilloscope() {
   for (let i = 0; i <= 3; i++) {
     const v = hi - (i / 3) * (hi - lo);
     const y = yFor(v);
-    ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(163,164,157,0.9)';
+    ctx.fillStyle = 'rgba(161,161,170,0.9)';
     ctx.fillText(v.toFixed(0), padL - 4, y);
   }
 
   // Spike threshold: the model fires when V > 0.7, which maps to -38.5 mV.
   if (-38.5 <= hi && -38.5 >= lo) {
     const y = yFor(-38.5);
-    ctx.strokeStyle = 'rgba(232,184,106,0.55)';
+    ctx.strokeStyle = 'rgba(249,115,22,0.55)';
     ctx.setLineDash([4, 3]);
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
@@ -1034,9 +1314,7 @@ function drawOscilloscope() {
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
-    ctx.globalAlpha = 0.85;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 3;
+    ctx.globalAlpha = 0.9;
     ctx.stroke();
     ctx.restore();
   });
@@ -1067,26 +1345,23 @@ let connectomeEdges = null;         // { n, src:Uint16Array, tgt:Uint16Array, w:
 let synapseGlow = null;             // per-edge activity glow, decays each step
 let synapseTotal = 0;               // total edges available on the server
 
-// 1024-LIF Region colors
+// 1024-LIF region colours — Ember's warm monochrome + amber family.
 const REGION_COLORS = [
-  new THREE.Color(0x00f0ff), // AL: Radiant Electric Cyan
-  new THREE.Color(0xa855f7), // KC: Vivid Deep Orchid
-  new THREE.Color(0xf59e0b), // CX: Brilliant Amber Gold
-  new THREE.Color(0xff2a6d), // DAN: High-Intensity Crimson
-  new THREE.Color(0x10b981), // MBON: Neon Emerald
+  new THREE.Color(0xFAFAFA), // AL: bone white
+  new THREE.Color(0xA1A1AA), // KC: zinc
+  new THREE.Color(0xF97316), // CX: amber
+  new THREE.Color(0xFDBA74), // DAN: pale amber
+  new THREE.Color(0x71717A), // MBON: dim zinc
 ];
 
 const REGION_NAMES = ['AL', 'KC', 'CX', 'DAN', 'MBON'];
-const REGION_HEX   = ['#00f0ff', '#a855f7', '#f59e0b', '#ff2a6d', '#10b981'];
+const REGION_HEX   = ['#FAFAFA', '#A1A1AA', '#F97316', '#FDBA74', '#71717A'];
 
-// MaleCNS Real Anatomical Groups:
-// Group 0: Optic lobes (90,807 neurons, #81b5c8 - crystalline cyan/blue)
-// Group 1: Central brain (32,170 neurons, #cfcac0 - luminous ivory/pearl)
-// Group 2: Descending neurons (1,312 neurons, #dfb672 - amber gold)
+// MaleCNS anatomical groups — zinc anatomy with an amber descending tract.
 const MALECNS_GROUP_COLORS = [
-  new THREE.Color(0x76b5d4), // Optic: Soft crystalline cyan/blue
-  new THREE.Color(0xdad5cb), // Central brain: Luminous pearl/ivory
-  new THREE.Color(0xe0b468), // Descending: Rich amber gold
+  new THREE.Color(0xA1A1AA), // Optic: muted zinc
+  new THREE.Color(0xE4E4E7), // Central brain: bone
+  new THREE.Color(0xF97316), // Descending: amber
 ];
 
 let maleCnsPositions = null; // Float32Array of all 124,289 brain somata
@@ -1255,7 +1530,7 @@ function buildMaleCnsPointsMesh() {
         }
 
         if (vActivity > 0.02) {
-          vec3 flare = mix(vec3(0.0, 0.95, 1.0), vec3(1.0, 1.0, 1.0), smoothstep(0.4, 1.0, vActivity));
+          vec3 flare = mix(vec3(0.98, 0.45, 0.09), vec3(1.0, 1.0, 1.0), smoothstep(0.4, 1.0, vActivity));
           col = mix(col, flare, vActivity);
           alpha = max(alpha, (0.45 + 0.55 * vActivity) * disc);
         }
@@ -1443,7 +1718,7 @@ function createGlowSpriteTexture() {
   const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
   gradient.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
   gradient.addColorStop(0.25, 'rgba(255, 255, 255, 0.7)');
-  gradient.addColorStop(0.55, 'rgba(180, 220, 255, 0.25)');
+  gradient.addColorStop(0.55, 'rgba(253, 186, 116, 0.22)');
   gradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 64, 64);
@@ -1471,13 +1746,13 @@ async function initThree() {
   threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   threeRenderer.setSize(W, H);
 
-  threeScene.add(new THREE.AmbientLight(0x162438, 1.8));
+  threeScene.add(new THREE.AmbientLight(0x1C1C20, 1.8));
 
-  const p1 = new THREE.PointLight(0x00f0ff, 2.5, 140);
+  const p1 = new THREE.PointLight(0xF97316, 2.5, 140);
   p1.position.set(28, 30, 35);
   threeScene.add(p1);
 
-  const p2 = new THREE.PointLight(0xa855f7, 2.2, 140);
+  const p2 = new THREE.PointLight(0xFFFFFF, 1.6, 140);
   p2.position.set(-28, -20, 28);
   threeScene.add(p2);
 
@@ -1778,9 +2053,9 @@ function updateBrainViz(spikes, dopamine) {
           sizeArr[i] = 4.8;
           alphaArr[i] = 0.95;
           if (dopamine > 0) {
-            colArr[i * 3 + 0] = 0.1; colArr[i * 3 + 1] = 1.0; colArr[i * 3 + 2] = 0.5;
+            colArr[i * 3 + 0] = 0.98; colArr[i * 3 + 1] = 0.45; colArr[i * 3 + 2] = 0.09;
           } else {
-            colArr[i * 3 + 0] = 1.0; colArr[i * 3 + 1] = 0.2; colArr[i * 3 + 2] = 0.3;
+            colArr[i * 3 + 0] = 0.91; colArr[i * 3 + 1] = 0.52; colArr[i * 3 + 2] = 0.52;
           }
         } else {
           // Resting: small crisp dot, still brighter than the wire haze
@@ -1877,7 +2152,7 @@ function drawPortfolioChart() {
 
   // Grid lines are drawn even before the first step, so the instrument reads as
   // idle rather than broken.
-  ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 1;
   for (let s = 1; s <= 3; s++) {
     const gy = (H / 4) * s;
@@ -1889,11 +2164,11 @@ function drawPortfolioChart() {
 
   if (portfolioHistory.length < 2) {
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(163,164,157,0.72)';
-    ctx.font = `10px 'IBM Plex Mono', monospace`;
+    ctx.fillStyle = 'rgba(161,161,170,0.72)';
+    ctx.font = `600 10px 'Plus Jakarta Sans', system-ui, sans-serif`;
     ctx.fillText('AWAITING FIRST STEP', W / 2, H / 2 - 4);
-    ctx.fillStyle = 'rgba(116,119,111,0.7)';
-    ctx.font = `9px 'IBM Plex Mono', monospace`;
+    ctx.fillStyle = 'rgba(113,113,122,0.75)';
+    ctx.font = `9px 'Plus Jakarta Sans', system-ui, sans-serif`;
     ctx.fillText('start auto-pilot or advance the fly', W / 2, H / 2 + 13);
     return;
   }
@@ -1906,12 +2181,11 @@ function drawPortfolioChart() {
   const getX = i => (i / (data.length - 1)) * W;
   const getY = v => H - ((v - minP) / range) * (H - 24) - 12;
 
-  // Gradient fill under Fly Trader
+  // Amber area under the fly; the fill is data, not a surface treatment.
   const grad = ctx.createLinearGradient(0, 0, 0, H);
   const lastVal = data[data.length - 1];
-  const isProfit = lastVal >= data[0];
-  grad.addColorStop(0, isProfit ? 'rgba(34, 197, 94, 0.35)' : 'rgba(239, 68, 68, 0.3)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.0)');
+  grad.addColorStop(0, 'rgba(249, 115, 22, 0.18)');
+  grad.addColorStop(1, 'rgba(249, 115, 22, 0.0)');
 
   ctx.beginPath();
   ctx.moveTo(getX(0), getY(data[0]));
@@ -1922,11 +2196,11 @@ function drawPortfolioChart() {
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // Fly Trader Line
+  // Fly Trader line — amber identity regardless of direction.
   ctx.beginPath();
   ctx.moveTo(getX(0), getY(data[0]));
   for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
-  ctx.strokeStyle = isProfit ? '#86d6a2' : '#e88585';
+  ctx.strokeStyle = '#F97316';
   ctx.lineWidth = 2.2;
   ctx.stroke();
 
@@ -1936,15 +2210,15 @@ function drawPortfolioChart() {
   ctx.setLineDash([4, 4]);
   ctx.moveTo(0, getY(bh));
   ctx.lineTo(W, getY(bh));
-  ctx.strokeStyle = '#e8b86a';
+  ctx.strokeStyle = '#A1A1AA';
   ctx.lineWidth = 1.4;
   ctx.stroke();
   ctx.setLineDash([]);
 
   // Current value label
   const cY = getY(lastVal);
-  ctx.fillStyle = isProfit ? '#86d6a2' : '#e88585';
-  ctx.font = `500 10px 'IBM Plex Mono', monospace`;
+  ctx.fillStyle = '#FDBA74';
+  ctx.font = `600 10px 'Plus Jakarta Sans', system-ui, sans-serif`;
   ctx.fillText(`$${lastVal.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, W - 90, Math.max(14, Math.min(H - 4, cY - 4)));
 }
 
@@ -1970,7 +2244,16 @@ function _drawRewardOnCanvas(canvas) {
   ctx.scale(dpr, dpr);
 
   ctx.clearRect(0, 0, W, H);
-  if (rewardHistory.length < 2) return;
+  if (rewardHistory.length < 2) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(161,161,170,0.66)';
+    ctx.font = `600 9px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    ctx.fillText('AWAITING REWARD SIGNAL', W / 2, H / 2 - 2);
+    ctx.fillStyle = 'rgba(113,113,122,0.8)';
+    ctx.font = `8.5px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    ctx.fillText('advance the fly to populate dopamine', W / 2, H / 2 + 12);
+    return;
+  }
 
   const data = rewardHistory;
   const maxAbs = Math.max(...data.map(Math.abs), 0.005);
@@ -1979,7 +2262,7 @@ function _drawRewardOnCanvas(canvas) {
   const getY = v => H / 2 - (v / maxAbs) * (H / 2 - 6);
 
   // Zero axis
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, H / 2);
@@ -1988,8 +2271,8 @@ function _drawRewardOnCanvas(canvas) {
 
   // Positive fill
   const posGrad = ctx.createLinearGradient(0, 0, 0, H / 2);
-  posGrad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
-  posGrad.addColorStop(1, 'rgba(34, 211, 238, 0.0)');
+  posGrad.addColorStop(0, 'rgba(249, 115, 22, 0.22)');
+  posGrad.addColorStop(1, 'rgba(249, 115, 22, 0.0)');
   ctx.beginPath();
   ctx.moveTo(getX(0), H / 2);
   data.forEach((v, i) => { ctx.lineTo(getX(i), getY(Math.max(0, v))); });
@@ -2001,7 +2284,7 @@ function _drawRewardOnCanvas(canvas) {
   ctx.beginPath();
   ctx.moveTo(getX(0), getY(data[0]));
   for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
-  ctx.strokeStyle = '#63c8b8';
+  ctx.strokeStyle = '#F97316';
   ctx.lineWidth = 1.6;
   ctx.stroke();
 }
@@ -2055,7 +2338,7 @@ function drawHeatmap(spikes) {
   });
 
   // Region labels on side
-  ctx.font = `bold 7px 'IBM Plex Mono', monospace`;
+  ctx.font = `700 7px 'Plus Jakarta Sans', system-ui, sans-serif`;
   const regionLabels = [
     { label: 'AL', startRow: 0, color: REGION_HEX[0] },
     { label: 'KC', startRow: 4, color: REGION_HEX[1] },
@@ -2169,12 +2452,37 @@ function openLabModal(data) {
   if (!modal) return;
   modal.classList.add('open');
 
-  if (data) populateLab(data);
+  if (data) {
+    populateLab(data);
+  } else {
+    drawEvolutionChart([]);
+    const grid = $('plasticity-grid');
+    if (grid) grid.innerHTML = '';
+  }
 }
 
 function closeLabModal() {
   const modal = $('evolution-modal');
   if (modal) modal.classList.remove('open');
+}
+
+let helpReturnFocus = null;
+
+function openHelpModal(trigger) {
+  const modal = $('help-modal');
+  if (!modal) return;
+  helpReturnFocus = trigger || document.activeElement;
+  modal.classList.add('open');
+  $('close-help-btn')?.focus();
+}
+
+function closeHelpModal() {
+  const modal = $('help-modal');
+  if (!modal || !modal.classList.contains('open')) return;
+  modal.classList.remove('open');
+  if (helpReturnFocus && typeof helpReturnFocus.focus === 'function') {
+    helpReturnFocus.focus();
+  }
 }
 
 function populateLab(d) {
@@ -2242,11 +2550,16 @@ function populateLab(d) {
   // Episode chart
   if (d.episodes_data && d.episodes_data.length > 0) {
     drawEvolutionChart(d.episodes_data);
+  } else {
+    drawEvolutionChart([]);
   }
 
   // Plasticity grid
   if (p.deltas && p.deltas.length > 0) {
     drawPlasticityGrid(p.deltas, p.weights_before, p.weights_after);
+  } else {
+    const grid = $('plasticity-grid');
+    if (grid) grid.innerHTML = '';
   }
 
   // Valence comparison
@@ -2267,8 +2580,18 @@ function drawEvolutionChart(episodes) {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
 
+  if (!Array.isArray(episodes) || episodes.length < 1) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(161,161,170,0.66)';
+    ctx.font = `600 9px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    ctx.fillText('NO EPISODES YET', W / 2, H / 2 - 3);
+    ctx.fillStyle = 'rgba(113,113,122,0.8)';
+    ctx.font = `8.5px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    ctx.fillText('evolve 25 episodes to plot progress', W / 2, H / 2 + 11);
+    return;
+  }
+
   const n = episodes.length;
-  if (n < 1) return;
 
   const returns  = episodes.map(e => e.return_pct);
   const winrates = episodes.map(e => e.win_rate);
@@ -2323,13 +2646,13 @@ function drawEvolutionChart(episodes) {
     });
   }
 
-  drawLine(returns, '#86d6a2', 2.5);
-  drawLine(winrates, '#a78bfa', 1.8);
-  drawLine(losses, '#e88585', 1.4);
+  drawLine(returns, '#86D6A2', 2.5);
+  drawLine(winrates, '#FDBA74', 1.8);
+  drawLine(losses, '#E88585', 1.4);
 
   // Episode numbers along bottom
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = `9px 'IBM Plex Mono', monospace`;
+  ctx.fillStyle = 'rgba(161,161,170,0.6)';
+  ctx.font = `9px 'Plus Jakarta Sans', system-ui, sans-serif`;
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 10))) {
     ctx.fillText(`${episodes[i].episode}`, gx(i) - 4, H - 4);
   }
@@ -2347,13 +2670,13 @@ function drawPlasticityGrid(deltas, weightsBefore, weightsAfter) {
     cell.className = 'p-cell';
     const intensity = Math.min(1, Math.abs(d) / maxDelta);
     if (d > 0.0001) {
-      cell.style.background = `rgba(34, 197, 94, ${0.15 + intensity * 0.8})`;
+      cell.style.background = `rgba(249, 115, 22, ${0.15 + intensity * 0.8})`;
       cell.title = `Synapse ${i}: +${d.toFixed(4)} (LTP)`;
     } else if (d < -0.0001) {
-      cell.style.background = `rgba(239, 68, 68, ${0.15 + intensity * 0.8})`;
+      cell.style.background = `rgba(232, 133, 133, ${0.15 + intensity * 0.8})`;
       cell.title = `Synapse ${i}: ${d.toFixed(4)} (LTD)`;
     } else {
-      cell.style.background = `rgba(100, 120, 160, 0.15)`;
+      cell.style.background = `rgba(255, 255, 255, 0.06)`;
       cell.title = `Synapse ${i}: stable`;
     }
     grid.appendChild(cell);
@@ -2429,10 +2752,10 @@ function setStatus(state, text) {
 let portfolioData = null;
 
 const PF_COLORS = {
-  fly:             '#5fd3e6',
-  'buy&hold':      '#86d6a2',
-  trend200:        '#e8b86a',
-  'mom120-top3-m': '#a78bfa',
+  fly:             '#F97316',
+  'buy&hold':      '#A1A1AA',
+  trend200:        '#FAFAFA',
+  'mom120-top3-m': '#FDBA74',
 };
 const PF_LABELS = {
   fly:             'Fly',
@@ -2560,8 +2883,8 @@ function drawPortfolioEquityChart() {
   const gx = i => padL + (i / (n - 1)) * cW;
   const gy = v => padT + cH - ((v - ymin) / ((ymax - ymin) || 1)) * cH;
 
-  ctx.font = '9px IBM Plex Mono, monospace';
-  ctx.fillStyle = '#a3a49d';
+  ctx.font = "9px 'Plus Jakarta Sans', system-ui, sans-serif";
+  ctx.fillStyle = '#A1A1AA';
   ctx.textAlign = 'right';
   for (let t = 0; t <= 4; t++) {
     const v = ymin + (ymax - ymin) * t / 4;
@@ -2590,7 +2913,7 @@ function drawPortfolioEquityChart() {
     const c = curves[k];
     ctx.beginPath();
     c.forEach((v, i) => { const x = gx(i), y = gy(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-    ctx.strokeStyle = PF_COLORS[name] || '#888';
+    ctx.strokeStyle = PF_COLORS[name] || '#71717A';
     ctx.lineWidth = name === 'fly' ? 2.0 : 1.1;
     ctx.globalAlpha = name === 'fly' ? 1 : 0.75;
     ctx.stroke();
@@ -2637,7 +2960,7 @@ function drawLearningHistoryChart() {
   ctx.clearRect(0, 0, W, H);
 
   // Grid + idle state so the card never looks like a hole in the layout.
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
   ctx.lineWidth = 1;
   for (let s = 1; s <= 3; s++) {
     const y = 12 + ((H - 30) / 4) * s;
@@ -2648,8 +2971,8 @@ function drawLearningHistoryChart() {
   const n = data.length;
   if (n < 2) {
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(163,164,157,0.7)';
-    ctx.font = `10px 'IBM Plex Mono', monospace`;
+    ctx.fillStyle = 'rgba(161,161,170,0.7)';
+    ctx.font = `600 10px 'Plus Jakarta Sans', system-ui, sans-serif`;
     ctx.fillText('NO EPISODE HISTORY YET', W / 2, H / 2);
     return;
   }
@@ -2679,33 +3002,33 @@ function drawLearningHistoryChart() {
     const x = gx(i), y = gy(e.return_pct);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#86d6a2';
+  ctx.strokeStyle = '#86D6A2';
   ctx.lineWidth = 1.8;
   ctx.stroke();
 
-  // Sharpe (cyan)
+  // Sharpe (zinc)
   ctx.beginPath();
   data.forEach((e, i) => {
     const x = gx(i), y = gy(e.sharpe);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#5fd3e6';
+  ctx.strokeStyle = '#A1A1AA';
   ctx.lineWidth = 1.4;
   ctx.stroke();
 
-  // Win rate (purple)
+  // Win rate (pale amber)
   ctx.beginPath();
   data.forEach((e, i) => {
     const x = gx(i), y = gy(e.win_rate);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#a78bfa';
+  ctx.strokeStyle = '#FDBA74';
   ctx.lineWidth = 1.2;
   ctx.stroke();
 
   // Episode numbers
-  ctx.fillStyle = 'rgba(163,164,157,0.55)';
-  ctx.font = `9px 'IBM Plex Mono', monospace`;
+  ctx.fillStyle = 'rgba(161,161,170,0.6)';
+  ctx.font = `9px 'Plus Jakarta Sans', system-ui, sans-serif`;
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) {
     ctx.fillText(`${data[i].episode}`, gx(i) - 4, H - 4);
   }
@@ -2930,7 +3253,7 @@ function renderSimulationHistoryUI() {
 }
 function startAuto() {
   autoPilot = true;
-  qAutoBtn.textContent = 'Stop Auto-Pilot';
+  qAutoBtn.textContent = 'Stop auto-pilot';
   qAutoBtn.classList.add('running');
   scheduleNext();
 }
@@ -2938,7 +3261,7 @@ function startAuto() {
 function stopAuto() {
   autoPilot = false;
   clearTimeout(autoTimer);
-  qAutoBtn.textContent = 'Start Auto-Pilot';
+  qAutoBtn.textContent = 'Start auto-pilot';
   qAutoBtn.classList.remove('running');
 }
 
@@ -2981,8 +3304,19 @@ $('train-sims-btn').addEventListener('click', () => {
   apiRunSimulations();
 });
 
+function updateSpeedFill() {
+  if (!qSpeedSlider) return;
+  const min = Number(qSpeedSlider.min) || 0;
+  const max = Number(qSpeedSlider.max) || 100;
+  const value = Number(qSpeedSlider.value) || min;
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  qSpeedSlider.style.setProperty('--fill', `${pct}%`);
+}
+
+updateSpeedFill();
 qSpeedSlider.addEventListener('input', () => {
   qSpeedVal.textContent = qSpeedSlider.value + ' ms';
+  updateSpeedFill();
 });
 
 $('view-mode').addEventListener('change', e => {
@@ -3041,6 +3375,29 @@ if (trainAgainBtn) {
 // Close modal on backdrop click
 $('evolution-modal')?.addEventListener('click', e => {
   if (e.target === $('evolution-modal')) closeLabModal();
+});
+
+// Quick guide
+$('help-btn')?.addEventListener('click', () => openHelpModal($('help-btn')));
+$('info-help-btn')?.addEventListener('click', () => openHelpModal($('info-help-btn')));
+['close-help-btn', 'close-help-footer-btn'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('click', closeHelpModal);
+});
+$('help-modal')?.addEventListener('click', e => {
+  if (e.target === $('help-modal')) closeHelpModal();
+});
+$('help-open-combo-btn')?.addEventListener('click', () => {
+  closeHelpModal();
+  document.querySelector('.tab-btn[data-tab="portfolio"]')?.click();
+  setTimeout(() => $('combo-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeLabModal();
+    closeHelpModal();
+  }
 });
 
 // Policy chip selector styling
@@ -3132,6 +3489,22 @@ async function boot() {
         });
       }
    });
+
+   // Canvas text is painted once. Repaint after the webfont settles so every
+   // label uses Plus Jakarta Sans instead of the metric-compatible fallback.
+   if (document.fonts && document.fonts.ready) {
+     document.fonts.ready.then(() => {
+       drawPortfolioChart();
+       drawPortfolioEquityChart();
+       drawRewardChart();
+       drawLearningHistoryChart();
+       drawOscilloscope();
+       drawHeatmap(spikeData1024);
+       if (lastTrainData && Array.isArray(lastTrainData.episodes_data)) {
+         drawEvolutionChart(lastTrainData.episodes_data);
+       }
+     });
+   }
  }
 
 // Start once DOM is ready

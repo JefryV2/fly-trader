@@ -4,8 +4,8 @@ The server does the expensive rollout; these tests pin the rules that decide
 which combo wins and how the search is reported, so a UI change cannot silently
 turn "ranked on validation" into "ranked on test".
 """
-from combo_lab import (MAX_COMBOS, combos_for, normalise_pool, rank,
-                       summarise)
+from combo_lab import (MAX_COMBOS, MAX_SIZE, combos_for, expand_beam,
+                       normalise_pool, rank, search_plan, summarise)
 
 
 def _row(combo, ret, bh, **kw):
@@ -28,6 +28,38 @@ def test_combos_are_all_subsets_in_lexicographic_order():
 def test_combos_empty_when_size_exceeds_pool():
     assert combos_for(["A", "B"], 3) == []
     assert combos_for(["A", "B"], 1) == [("A",), ("B",)]
+
+
+def test_plan_stays_exhaustive_when_the_space_fits():
+    plan = search_plan(10, 4)
+    assert plan["mode"] == "exhaustive"
+    assert plan["total"] == 210
+    assert plan["beam"] is None
+    assert search_plan(12, 3)["total"] == 220
+
+
+def test_plan_uses_a_bounded_beam_for_larger_spaces():
+    for size in (4, 5, 6, 7, 8):
+        plan = search_plan(12, size)
+        assert plan["mode"] == "guided"
+        assert plan["seed_count"] > 0
+        assert plan["beam"] >= 1
+        assert 0 < plan["total"] <= MAX_COMBOS
+    assert search_plan(10, 5)["mode"] == "guided"
+
+
+def test_plan_rejects_spaces_that_cannot_fit_the_budget():
+    assert search_plan(2, 3)["mode"] == "none"
+    assert search_plan(20, 5)["mode"] == "none"
+    assert search_plan(12, 9)["mode"] == "exhaustive"
+    assert search_plan(2, 2)["mode"] == "exhaustive"
+    assert search_plan(2, 2)["total"] == 1
+    assert MAX_SIZE == 8
+
+
+def test_expand_beam_adds_one_stock_and_dedupes():
+    assert expand_beam([("A", "B"), ("A", "C")], ["A", "B", "C", "D"]) == [
+        ("A", "B", "C"), ("A", "B", "D"), ("A", "C", "D")]
 
 
 def test_rank_uses_validation_return_then_simpler_basket():

@@ -1707,68 +1707,170 @@ def _combo_rollout(combo, split, agent):
     }
 
 
-def _combo_worker(job_id, combos, refresh):
-    from combo_lab import rank, summarise
+def _combo_worker(job_id, combos, refresh, plan):
+    from combo_lab import expand_beam, rank, summarise
     job = _COMBO_JOBS[job_id]
     t0 = time.time()
-    results = []
+    results = []          # target-size rows, including individual failures
+    done = 0
+    size = int(plan["size"])
+    mode = plan["mode"]
     with _COMBO_LOCK:
         job["status"] = "running"
+
+    def stopped() -> bool:
+        with _COMBO_LOCK:
+            return bool(job.get("cancel"))
+
+    def evaluate(combo) -> dict:
+        nonlocal done
+        key = _combo_key(combo, "val")
+        try:
+            row = None if refresh else _COMBO_ROWS.get(key)
+            if row is None:
+                row = _combo_rollout(combo, "val", agent)
+                _COMBO_ROWS[key] = row
+        except Exception as exc:
+            # One bad subset (a calendar gap, a bad row) must not kill the
+            # search; keep it as a skipped row so the summary can count it.
+            row = {"combo": list(combo), "split": "val", "error": str(exc)}
+        done += 1
+        return row
+
+    def publish(phase: str, rows, show_results: bool) -> None:
+        with _COMBO_LOCK:
+            job["done"] = done
+            job["phase"] = phase
+            job["failed"] = sum(1 for r in rows if r.get("error"))
+            if show_results:
+                job["results"] = rank(rows)[:12]
+                job["summary"] = summarise(rows, len(rows))
+
     try:
         probe = _combo_env(combos[0], "val")
         agent = _load_portfolio_agent(probe.obs_dim)
         del probe
-        failed = 0
-        for i, combo in enumerate(combos):
-            key = _combo_key(combo, "val")
-            try:
-                row = None if refresh else _COMBO_ROWS.get(key)
-                if row is None:
-                    row = _combo_rollout(combo, "val", agent)
-                    _COMBO_ROWS[key] = row
-                results.append(row)
-            except Exception as exc:
-                # One bad subset (a calendar gap, a bad row) must not kill a
-                # 200-combo search; keep it in the results as a skipped row.
-                failed += 1
-                results.append({"combo": list(combo), "split": "val",
-                                "error": str(exc)})
-            with _COMBO_LOCK:
-                job["done"] = i + 1
-                job["failed"] = failed
+
+        cancelled = False
+        if mode == "guided":
+            # Start from every pair, then keep only the strongest few and add
+            # one stock at a time. This is a heuristic search, not an
+            # exhaustive one; the UI labels it and the winner is still tested
+            # once on the unseen split.
+            seeds = []
+            for i, combo in enumerate(combos):
+                if stopped():
+                    cancelled = True
+                    break
+                seeds.append(evaluate(combo))
+                if (i + 1) % 10 == 0 or i + 1 == len(combos):
+                    publish("seed", seeds, False)
+            if not cancelled:
+                ranked_seeds = rank(seeds)
+                if not ranked_seeds:
+                    first = next((r["error"] for r in seeds if r.get("error")),
+                                 "unknown error")
+                    raise RuntimeError(f"all {len(seeds)} seed pairs failed: {first}")
+                beam = [tuple(r["combo"])
+                        for r in ranked_seeds[:int(plan["beam"])]]
+                for target in range(3, size + 1):
+                    if stopped():
+                        cancelled = True
+                        break
+                    candidates = expand_beam(beam, job["pool"])
+                    stage = []
+                    for i, combo in enumerate(candidates):
+                        if stopped():
+                            cancelled = True
+                            break
+                        stage.append(evaluate(combo))
+                        last = i + 1 == len(candidates)
+                        if target == size:
+                            if (i + 1) % 5 == 0 or last:
+                                publish(f"extend {target}", stage, True)
+                        elif (i + 1) % 10 == 0 or last:
+                            publish(f"extend {target}", stage, False)
+                    if cancelled:
+                        if target == size and stage:
+                            # Keep quads/fives that finished before Stop.
+                            results = stage
+                            publish(f"extend {target}", stage, True)
+                        break
+                    if not stage:
+                        raise RuntimeError(
+                            f"no candidates left while extending to {target} stocks")
+                    if target == size:
+                        results = stage
+                    else:
+                        ranked_stage = rank(stage)
+                        if not ranked_stage:
+                            first = next((r["error"] for r in stage
+                                          if r.get("error")), "unknown error")
+                            raise RuntimeError(
+                                f"all candidates failed at size {target}: {first}")
+                        beam = [tuple(r["combo"])
+                                for r in ranked_stage[:int(plan["beam"])]]
+        else:
+            for i, combo in enumerate(combos):
+                if stopped():
+                    cancelled = True
+                    break
+                results.append(evaluate(combo))
+                if (i + 1) % 10 == 0 or i + 1 == len(combos):
+                    publish("val", results, True)
+
+        with _COMBO_LOCK:
+            job["done"] = done
+            job["failed"] = sum(1 for r in results if r.get("error"))
+            job["summary"] = summarise(results, len(results))
+            if results:
                 job["results"] = rank(results)[:12]
-                job["summary"] = summarise(results, len(combos))
+
+        if cancelled:
+            with _COMBO_LOCK:
+                job.update(status="cancelled", phase=None, best=None,
+                           cancel=False, elapsed_s=round(time.time() - t0, 1))
+            return
+
         ranked = rank(results)
         if not ranked:
             first = next((r["error"] for r in results if r.get("error")),
                          "unknown error")
-            raise RuntimeError(f"all {len(combos)} combos failed: {first}")
-        best = None
-        if ranked:
-            top = ranked[0]
-            key = _combo_key(top["combo"], "test")
-            best = dict(top)
-            try:
-                test = None if refresh else _COMBO_ROWS.get(key)
-                if test is None:
-                    with _COMBO_LOCK:
-                        job["phase"] = "test"
-                    test = _combo_rollout(top["combo"], "test", agent)
-                    _COMBO_ROWS[key] = test
-                best["test"] = test
-                best["test_is_ticker_holdout"] = not any(
-                    t in COMBO_TRAIN_TICKERS for t in best["combo"])
-            except Exception as exc:
-                best["test_error"] = str(exc)
+            raise RuntimeError(
+                f"all {len(results)} {size}-stock baskets failed: {first}")
+
+        top = ranked[0]
+        key = _combo_key(top["combo"], "test")
+        best = dict(top)
+        try:
+            test = None if refresh else _COMBO_ROWS.get(key)
+            if test is None:
+                with _COMBO_LOCK:
+                    job["phase"] = "test"
+                test = _combo_rollout(top["combo"], "test", agent)
+                _COMBO_ROWS[key] = test
+            best["test"] = test
+            best["test_is_ticker_holdout"] = not any(
+                t in COMBO_TRAIN_TICKERS for t in best["combo"])
+        except Exception as exc:
+            best["test_error"] = str(exc)
+
+        if stopped():
+            with _COMBO_LOCK:
+                job.update(status="cancelled", phase=None, best=None,
+                           cancel=False, elapsed_s=round(time.time() - t0, 1))
+            return
+
         with _COMBO_LOCK:
             job.update(status="done", phase=None, best=best,
                        results=ranked[:12],
-                       summary=summarise(results, len(combos)),
+                       summary=summarise(results, len(results)),
+                       cancel=False,
                        elapsed_s=round(time.time() - t0, 1))
     except Exception as exc:                      # keep the job introspectable
         with _COMBO_LOCK:
             job.update(status="error", error=str(exc), phase=None,
-                       elapsed_s=round(time.time() - t0, 1))
+                       cancel=False, elapsed_s=round(time.time() - t0, 1))
 
 
 class ComboPayload(BaseModel):
@@ -1779,13 +1881,19 @@ class ComboPayload(BaseModel):
 
 @app.post("/combo_search")
 def start_combo_search(payload: ComboPayload):
-    """Start a background search over every ``size``-stock combo of a universe."""
-    from combo_lab import MAX_COMBOS, combos_for, normalise_pool
+    """Start a background search over ``size``-stock baskets of a universe.
+
+    The search is exhaustive when the space fits the request budget. Larger
+    spaces use a guided beam (all pairs, then extend the strongest baskets) so
+    quads and larger baskets remain practical. Selection is still validation-
+    only; the winner is tested once on the unseen split.
+    """
+    from combo_lab import MAX_SIZE, combos_for, normalise_pool, search_plan
     pool = normalise_pool(payload.tickers if payload.tickers is not None
                           else SESSION["tickers"])
     size = int(payload.size)
-    if not 2 <= size <= 4:
-        raise HTTPException(400, "Combo size must be 2, 3 or 4")
+    if not 2 <= size <= MAX_SIZE:
+        raise HTTPException(400, f"Combo size must be between 2 and {MAX_SIZE}")
     if len(pool) < size:
         raise HTTPException(
             400, f"Need at least {size} stocks in the universe, got {len(pool)}")
@@ -1820,28 +1928,31 @@ def start_combo_search(payload: ComboPayload):
         raise HTTPException(
             400, f"Not enough tickers with validation data for {size}-stock "
                  f"combos. {detail}")
-    combos = combos_for(pool, size)
-    if len(combos) > MAX_COMBOS:
-        raise HTTPException(
-            400, f"C({len(pool)},{size}) = {len(combos)} combos, above the "
-                 f"{MAX_COMBOS}-combo limit. Pick fewer stocks or a smaller size.")
+    plan = search_plan(len(pool), size)
+    if plan["mode"] == "none":
+        raise HTTPException(400, plan["reason"])
+    combos = (combos_for(pool, size) if plan["mode"] == "exhaustive"
+              else combos_for(pool, 2))
     with _COMBO_LOCK:
-        if any(j["status"] in ("queued", "running")
+        if any(j["status"] in ("queued", "running", "cancelling")
                for j in _COMBO_JOBS.values()):
             raise HTTPException(409, "A combo search is already running")
         job_id = uuid.uuid4().hex[:12]
         _COMBO_JOBS[job_id] = {
-            "job_id": job_id, "status": "queued", "phase": "val",
+            "job_id": job_id, "status": "queued",
+            "phase": "seed" if plan["mode"] == "guided" else "val",
             "pool": pool, "size": size, "done": 0, "failed": 0,
-            "total": len(combos), "excluded": excluded,
-            "results": [], "summary": {"evaluated": 0, "total": len(combos)},
+            "total": int(plan["total"]), "excluded": excluded,
+            "search": dict(plan), "cancel": False,
+            "results": [], "summary": {"evaluated": 0, "total": 0},
             "best": None, "error": None, "elapsed_s": 0.0,
         }
     threading.Thread(target=_combo_worker,
-                     args=(job_id, combos, bool(payload.refresh)),
+                     args=(job_id, combos, bool(payload.refresh), plan),
                      daemon=True).start()
     return {"job_id": job_id, "pool": pool, "size": size,
-            "total": len(combos), "excluded": excluded}
+            "total": int(plan["total"]), "search": dict(plan),
+            "excluded": excluded}
 
 
 @app.get("/combo_search/{job_id}")
@@ -1851,6 +1962,19 @@ def combo_search_status(job_id: str):
         if job is None:
             raise HTTPException(404, "Unknown combo search")
         return dict(job)
+
+
+@app.post("/combo_search/{job_id}/cancel")
+def cancel_combo_search(job_id: str):
+    """Stop after the rollout in flight; keep whatever was already scored."""
+    with _COMBO_LOCK:
+        job = _COMBO_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Unknown combo search")
+        if job["status"] in ("queued", "running"):
+            job["cancel"] = True
+            job["status"] = "cancelling"
+        return {"job_id": job_id, "status": job["status"]}
 
 
 def _portfolio_sample(points, stride):

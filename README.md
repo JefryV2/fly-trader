@@ -1007,11 +1007,22 @@ runs vary.
 
 ### Combo Lab: which k names should the fly be allowed to trade?
 
-The **Portfolio** tab also has a Combo Lab: pick 2–12 tickers on the left,
-choose **Pairs** or **Triples**, and the deployed portfolio fly trades *every
-subset* of that size. Each subset is ranked by the **fly's own validation
-return**, with excess over that basket's buy & hold shown on every row; only the
-winner is then run once on the **test** window.
+The **Portfolio** tab also has a Combo Lab: pick 2–8 stocks from the universe
+on the left, choose a basket size from **Pairs** through **Eight-stock**, and
+the deployed portfolio fly tries subsets of that size. The lab scores at most
+240 candidates per run:
+
+- **All combos** when `C(n, k) ≤ 240` — every subset is scored.
+- **Guided** otherwise — score every pair, keep the strongest `beam` baskets,
+  and extend those one stock at a time. This is still a validation-only search,
+  and the winner is tested once on the unseen split.
+- If even all starting pairs exceed 240, the run is refused with a clear
+  "narrow the pool" message instead of starting an unbounded job.
+
+The card previews the mode, candidate count, and guided budget before the run.
+Each subset is ranked by the **fly's own validation return**, with excess over
+that basket's buy & hold shown on every row; only the winner is then run once on
+the **test** window.
 
 Why return rather than excess? An earlier build ranked by excess, and it picked
 a triple whose *benchmark* was weaker, not a combo where the fly traded better:
@@ -1021,8 +1032,12 @@ Ties now break toward the simpler basket for the same reason. Excess remains the
 honesty column — it says whether the return came from the fly or from beta.
 
 - `POST /combo_search` `{tickers, size}` starts a background job (one at a time,
-  ≤240 combos); `GET /combo_search/{id}` returns progress, the live leaderboard,
-  the winner and its out-of-sample test row.
+  ≤240 candidate rollouts); `GET /combo_search/{id}` returns progress, the live
+  leaderboard, the winner and its out-of-sample test row. The response includes
+  `search.mode`, `search.beam`, `search.seed_count`, and `search.total` so the
+  card can show whether the run was exhaustive or guided.
+- `POST /combo_search/{id}/cancel` stops after the current basket; partial
+  results stay on screen and are labelled as partial.
 - The card shows how many combos beat their own buy & hold and the **median**
   excess, not just the top row. Picking the best of N is a search, so the top
   validation number is optimistic by construction; the test row is the honest

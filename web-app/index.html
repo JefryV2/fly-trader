@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-neuron-count="title">FlyTrader — Drosophila MaleCNS 1024-LIF Connectome × RL</title>
   <meta name="description" content="Drosophila connectome-based reinforcement learning trading platform using 1024 biologically-grounded spiking LIF neurons." />
+  <meta name="theme-color" content="#09090B" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23F97316'/%3E%3Cpath d='M16 8v16M9.5 12.5l6.5 4 6.5-4M9.5 21.5l6.5-4 6.5 4' fill='none' stroke='%2309090B' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=27" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=34" />
 </head>
 <body>
 
@@ -32,43 +34,44 @@
 
     <!-- Live stats strip (updated from JS) -->
     <div class="topbar-stats">
-      <div class="stat-chip">
+      <div class="stat-chip" title="Current mark-to-market value of the simulated account.">
         <span class="stat-chip-label">Portfolio</span>
         <span class="stat-chip-val" id="tb-portfolio">$100,000</span>
       </div>
-      <div class="stat-chip">
+      <div class="stat-chip" title="Total return since this session started.">
         <span class="stat-chip-label">Return</span>
         <span class="stat-chip-val" id="tb-return">+0.00%</span>
       </div>
-      <div class="stat-chip">
+      <div class="stat-chip" title="Annualised return per unit of volatility. — until there is enough history.">
         <span class="stat-chip-label">Sharpe</span>
         <span class="stat-chip-val" id="tb-sharpe">—</span>
       </div>
-      <div class="stat-chip">
+      <div class="stat-chip" title="Largest peak-to-trough decline in this session.">
         <span class="stat-chip-label">Drawdown</span>
         <span class="stat-chip-val" id="tb-drawdown">—</span>
       </div>
-      <div class="stat-chip">
+      <div class="stat-chip" title="Share of closed trades that ended positive.">
         <span class="stat-chip-label">Win Rate</span>
         <span class="stat-chip-val" id="tb-winrate">—</span>
       </div>
-      <div class="stat-chip">
+      <div class="stat-chip" title="Current bar / total bars (or monthly decisions) in this session.">
         <span class="stat-chip-label">Step</span>
         <span class="stat-chip-val" id="tb-step">0 / 723</span>
       </div>
     </div>
 
     <div class="topbar-right">
-      <div class="ticker-badge" id="ticker-badge">AAPL · 753 Days</div>
-      <div class="brain-badge" id="brain-badge">Gen 1 · Ep 0</div>
-      <div class="dopamine-pill" id="dopamine-pill">
+      <div class="ticker-badge" id="ticker-badge" title="The tickers currently loaded into the session.">AAPL · 753 Days</div>
+      <div class="brain-badge" id="brain-badge" title="Training generation and episode count.">Gen 1 · Ep 0</div>
+      <div class="dopamine-pill" id="dopamine-pill" title="Dopamine is the fly's reward signal. Positive means the last trade was rewarded.">
         <span class="da-label">DA:</span>
         <span id="dopamine-val">0.000</span>
       </div>
-      <button class="lab-pill-btn" id="open-lab-top-btn">Evolution Lab</button>
-      <div class="status-pill" id="status-pill">
+      <button class="lab-pill-btn" id="open-lab-top-btn" title="Open the Synaptic Plasticity & Evolution Lab">Evolution Lab</button>
+      <button class="lab-pill-btn help-pill-btn" id="help-btn" title="How to use FlyTrader" aria-label="Open the FlyTrader guide" aria-haspopup="dialog" aria-controls="help-modal">?</button>
+      <div class="status-pill" id="status-pill" title="Connection status for the local trading API.">
         <span class="dot"></span>
-        <span id="status-text">Connecting…</span>
+        <span id="status-text" aria-live="polite">Connecting…</span>
       </div>
     </div>
   </header>
@@ -118,8 +121,15 @@
 
       <!-- Universe & budget -->
       <div class="card" id="universe-card">
-        <div class="card-label">Universe &amp; Budget <span class="label-meta">1–N names</span></div>
+        <div class="card-label">Universe &amp; Budget <span class="label-meta" id="ticker-count">1 selected</span></div>
         <div class="ticker-chips" id="ticker-chips"></div>
+        <div class="uni-select-row">
+          <span class="uni-select-count">Your pool</span>
+          <div class="uni-select-actions">
+            <button type="button" class="uni-select-btn" id="select-all-tickers" title="Select every available ticker">Select all</button>
+            <button type="button" class="uni-select-btn" id="clear-tickers" title="Clear the stock selection">Clear</button>
+          </div>
+        </div>
         <div class="uni-hint" id="uni-hint">1 stock = single-asset fly · 2+ = portfolio fly</div>
         <div class="uni-row">
           <span class="uni-lab">Budget</span>
@@ -135,8 +145,8 @@
           <span class="switch-slider"></span>
           <span>Continuous sizing (0–100%)</span>
         </label>
-        <button type="button" class="apply-btn" id="apply-universe-btn">Apply Universe</button>
-        <div class="uni-status" id="uni-status"></div>
+        <button type="button" class="apply-btn" id="apply-universe-btn" title="Build the session from the selected stocks and budget">Load selected stocks</button>
+        <div class="uni-status" id="uni-status" role="status" aria-live="polite"></div>
       </div>
 
       <div class="rail-label" data-num="03">Fly Controls</div>
@@ -144,38 +154,46 @@
       <!-- Controls card -->
       <div class="card" id="action-card">
 
+        <!-- Train + Lab buttons -->
+        <div class="card-label">Train &amp; Evaluate <span class="label-meta">improve the fly</span></div>
+        <div class="train-action-row">
+          <button class="train-btn" id="train-batch-btn" title="Train the fly for 25 episodes">Train 25 eps</button>
+          <button class="train-btn" id="train-sims-btn" disabled title="Run five simulated episodes and save them to history (enabled after the first training run)">Run 5 sims</button>
+          <button class="lab-btn" id="open-lab-btn" title="Open the Evolution Lab">Lab</button>
+        </div>
+
         <!-- Auto-pilot row -->
         <div class="card-label">Auto-Pilot <span class="label-meta">step rate</span></div>
         <div class="autopilot-row">
-          <button class="toggle-btn" id="auto-btn">Start Auto-Pilot</button>
+          <button class="toggle-btn" id="auto-btn" title="Advance the fly automatically. Click again to pause.">Start auto-pilot</button>
           <div class="speed-group">
-            <input type="range" id="speed-slider" min="16" max="1500" value="400" step="16" />
+            <input type="range" id="speed-slider" min="16" max="1500" value="400" step="16" title="Delay between automatic steps" />
             <span id="speed-val">400ms</span>
           </div>
         </div>
 
         <!-- Policy grid 2×2 -->
-        <div class="card-label">Decision Policy</div>
+        <div class="card-label">Decision Policy <span class="label-meta">who decides</span></div>
         <div class="policy-grid">
-          <label class="policy-chip active">
+          <label class="policy-chip active" title="The trained connectome brain chooses each action from its learned policy.">
             <input type="radio" name="policy" value="brain" checked />
             <span class="chip-index">01 / Model</span>
             <span class="chip-title">Fly Brain</span>
             <span class="chip-desc" data-neuron-count="1024-LIF"><span data-neuron-count="1024">1,024</span>-LIF actor-critic</span>
           </label>
-          <label class="policy-chip">
+          <label class="policy-chip" title="A simple trend-following baseline. Useful for comparison.">
             <input type="radio" name="policy" value="momentum" />
             <span class="chip-index">02 / Trend</span>
             <span class="chip-title">Momentum</span>
             <span class="chip-desc">Trend surfer</span>
           </label>
-          <label class="policy-chip">
+          <label class="policy-chip" title="A mean-reversion baseline that fades short-term moves.">
             <input type="radio" name="policy" value="mean-revert" />
             <span class="chip-index">03 / Revert</span>
             <span class="chip-title">Mean-Revert</span>
             <span class="chip-desc">Volatility harvester</span>
           </label>
-          <label class="policy-chip">
+          <label class="policy-chip" title="A random baseline. Use it to see how much the brain actually adds.">
             <input type="radio" name="policy" value="random" />
             <span class="chip-index">04 / Noise</span>
             <span class="chip-title">Random</span>
@@ -185,35 +203,34 @@
 
         <!-- Online STDP toggle -->
         <div class="learning-control">
-          <label class="switch-row">
+          <label class="switch-row" title="Update the fly's synapses after each step using its reward signal.">
             <input type="checkbox" id="learning-toggle" checked />
             <span class="switch-slider"></span>
             <span>Online Dopaminergic Learning (STDP)</span>
           </label>
         </div>
 
-        <!-- Train + Lab buttons -->
-        <div class="train-action-row">
-          <button class="train-btn" id="train-batch-btn">Evolve 25 eps</button>
-          <button class="train-btn" id="train-sims-btn" disabled>Run 5 sims</button>
-          <button class="lab-btn" id="open-lab-btn" title="Open Synaptic Evolution Lab">Lab</button>
-        </div>
-
-        <!-- Manual override -->
-        <div class="card-label">Manual Override</div>
-        <div class="action-btns">
-          <button class="action-btn buy"  id="btn-buy25"  data-action="1">Buy 25%</button>
-          <button class="action-btn buy"  id="btn-buy50"  data-action="2">Buy 50%</button>
-          <button class="action-btn buy"  id="btn-buy100" data-action="3">Buy 100%</button>
-          <button class="action-btn hold" id="btn-hold"   data-action="0">Hold Position</button>
-          <button class="action-btn sell" id="btn-sell25"  data-action="4">Sell 25%</button>
-          <button class="action-btn sell" id="btn-sell50"  data-action="5">Sell 50%</button>
-          <button class="action-btn sell" id="btn-sell100" data-action="6">Sell 100%</button>
-        </div>
+        <!-- Manual override (kept out of the way until needed) -->
+        <details class="advanced-controls" id="manual-controls">
+          <summary>
+            <span class="advanced-title">Manual trades</span>
+            <span class="advanced-tag">advanced</span>
+          </summary>
+          <p class="advanced-note" id="manual-note">Place a one-off trade without waiting for the brain.</p>
+          <div class="action-btns">
+            <button class="action-btn buy"  id="btn-buy25"  data-action="1">Buy 25%</button>
+            <button class="action-btn buy"  id="btn-buy50"  data-action="2">Buy 50%</button>
+            <button class="action-btn buy"  id="btn-buy100" data-action="3">Buy 100%</button>
+            <button class="action-btn hold" id="btn-hold"   data-action="0">Hold Position</button>
+            <button class="action-btn sell" id="btn-sell25"  data-action="4">Sell 25%</button>
+            <button class="action-btn sell" id="btn-sell50"  data-action="5">Sell 50%</button>
+            <button class="action-btn sell" id="btn-sell100" data-action="6">Sell 100%</button>
+          </div>
+        </details>
       </div>
 
       <!-- Reset -->
-      <button class="reset-btn" id="reset-btn">Reset Episode</button>
+      <button class="reset-btn" id="reset-btn" title="Start the current session again from its first bar">Reset session</button>
 
       <div class="rail-label" data-num="04">Tape</div>
 
@@ -558,11 +575,6 @@
           <div class="pf-legend" id="portfolio-legend"></div>
         </div>
 
-        <div class="card">
-          <div class="card-label">Strategies</div>
-          <div class="pf-table" id="portfolio-table"></div>
-        </div>
-
         <!-- Combo Lab: let the fly try every k-stock subset -->
         <div class="card" id="combo-card">
           <div class="card-label">
@@ -570,30 +582,55 @@
             <span class="combo-badge" id="combo-badge">idle</span>
           </div>
           <div class="combo-help">
-            Runs every <b>k-stock basket</b> the fly can build from your universe,
-            ranks them by its own <b>validation return</b>, then tests the winner
-            once on the unseen window.
+            Ask the fly to try different <b>groups of stocks</b> from the universe
+            on the left. It ranks them on <b>validation</b> data, then checks the
+            winner once on <b>unseen test</b> data.
           </div>
           <div class="combo-controls">
-            <div class="combo-sizes" id="combo-sizes">
-              <button type="button" class="combo-size" data-size="2">Pairs</button>
-              <button type="button" class="combo-size active" data-size="3">Triples</button>
+            <div class="combo-size-stepper" id="combo-sizes">
+              <button type="button" class="combo-step" data-step="-1" aria-label="Decrease basket size">−</button>
+              <div class="combo-size-readout" title="Number of stocks in each basket">
+                <span id="combo-size-val">3</span>
+                <span id="combo-size-label">Triples</span>
+              </div>
+              <button type="button" class="combo-step" data-step="1" aria-label="Increase basket size">+</button>
             </div>
-            <button type="button" class="btn-clear-sims" id="combo-run-btn">Run search</button>
+            <button type="button" class="btn-clear-sims combo-run-btn" id="combo-run-btn">Search baskets</button>
+            <button type="button" class="btn-clear-sims combo-stop-btn" id="combo-stop-btn" hidden>Stop</button>
           </div>
-          <div class="uni-status" id="combo-status">Pick 3+ stocks on the left, then run.</div>
+          <div class="combo-meta">
+            <span class="combo-mode-pill" id="combo-mode">All combos</span>
+            <span id="combo-count">220 baskets</span>
+          </div>
+          <div class="uni-status" id="combo-status" role="status" aria-live="polite">Select at least 3 stocks on the left, then search.</div>
           <div class="combo-bar-wrap" id="combo-bar-wrap" hidden>
             <div class="combo-bar" id="combo-bar"></div>
           </div>
+          <div class="combo-empty" id="combo-empty">
+            Choose a basket size and run a search. The best validation basket and
+            its unseen-data test will appear here.
+          </div>
+          <div class="combo-stale" id="combo-stale" hidden></div>
           <div id="combo-best"></div>
           <div class="combo-list" id="combo-list"></div>
           <div class="combo-note" id="combo-note" hidden></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Strategies</div>
+          <div class="pf-table" id="portfolio-table"></div>
         </div>
 
       </div>
 
       <!-- ─ INFO TAB ─ -->
       <div class="tab-panel" id="tab-control">
+
+        <div class="card help-card">
+          <div class="card-label">Quick Start</div>
+          <p class="help-lead">New here? The guide explains the controls, the jargon, and how to read the honest test result.</p>
+          <button type="button" class="btn-secondary" id="info-help-btn">Open the guide</button>
+        </div>
 
         <div class="card">
           <div class="card-label">Brain Architecture</div>
@@ -636,17 +673,17 @@
   </main>
 
   <!-- ═══════════════════════ EVOLUTION LAB MODAL ═══════════════════════ -->
-  <div class="modal-backdrop" id="evolution-modal">
+  <div class="modal-backdrop" id="evolution-modal" role="dialog" aria-modal="true" aria-labelledby="lab-modal-title">
     <div class="modal-container">
       <div class="modal-header">
         <div class="m-title-group">
           <span class="m-icon">LAB</span>
           <div>
-            <h2 class="m-title">Synaptic Plasticity &amp; Evolution Lab</h2>
+            <h2 class="m-title" id="lab-modal-title">Synaptic Plasticity &amp; Evolution Lab</h2>
             <p class="m-subtitle">Detailed telemetry of Actor-Critic policy adaptation across 25 training episodes</p>
           </div>
         </div>
-        <button class="modal-close-btn" id="close-lab-btn">&times;</button>
+        <button class="modal-close-btn" id="close-lab-btn" aria-label="Close Evolution Lab">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -699,7 +736,7 @@
           <div class="lab-section">
             <div class="lab-section-header">
               <h3>Synaptic Weight Deltas (ΔW)</h3>
-              <span class="lab-pill-legend">Green = LTP · Red = LTD</span>
+              <span class="lab-pill-legend">Amber = LTP · Red = LTD</span>
             </div>
             <div class="plasticity-grid" id="plasticity-grid"></div>
           </div>
@@ -735,16 +772,94 @@
 
       <div class="modal-footer">
         <button class="btn-secondary" id="close-lab-footer-btn">Close Lab</button>
-        <button class="btn-primary" id="train-again-btn">Evolve 25 More Episodes</button>
+        <button class="btn-primary" id="train-again-btn">Train 25 more episodes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ QUICK GUIDE MODAL ═══════════════════════ -->
+  <div class="modal-backdrop" id="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-modal-title">
+    <div class="modal-container help-modal-container">
+      <div class="modal-header">
+        <div class="m-title-group">
+          <span class="m-icon">?</span>
+          <div>
+            <h2 class="m-title" id="help-modal-title">A quick guide to FlyTrader</h2>
+            <p class="m-subtitle">Start with the left rail. The rest is telemetry you can explore later.</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" id="close-help-btn" aria-label="Close guide">&times;</button>
+      </div>
+
+      <div class="modal-body help-body">
+        <div class="help-steps">
+          <div class="help-step">
+            <span class="help-step-num">1</span>
+            <div>
+              <b>Choose your stocks</b>
+              <p>One ticker gives you the single-stock fly. Two or more switch to the portfolio fly, which allocates across the group on a monthly rebalance.</p>
+            </div>
+          </div>
+          <div class="help-step">
+            <span class="help-step-num">2</span>
+            <div>
+              <b>Load the session</b>
+              <p>Press <b>Load selected stocks</b>, then either start <b>Auto-Pilot</b> to let it trade, or <b>Train 25 eps</b> to improve the brain.</p>
+            </div>
+          </div>
+          <div class="help-step">
+            <span class="help-step-num">3</span>
+            <div>
+              <b>Check the result honestly</b>
+              <p>The <b>Portfolio</b> tab has the held-out backtest and the <b>Combo Lab</b>. Validation is for choosing; the test row is the unseen check.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-grid">
+          <section class="help-section">
+            <h3>Controls</h3>
+            <dl class="help-list">
+              <dt>Auto-Pilot</dt><dd>Repeats the fly's decision at the chosen speed. Click it again to pause.</dd>
+              <dt>Train 25 eps</dt><dd>Runs 25 learning episodes and updates the Evolution Lab.</dd>
+              <dt>Run 5 sims</dt><dd>Runs five simulated episodes and saves them for comparison.</dd>
+              <dt>Lab</dt><dd>Opens the plasticity, loss, and valence telemetry.</dd>
+              <dt>Combo Lab</dt><dd>Tests groups of 2–8 stocks. Up to 240 candidate baskets are scored; larger pools use a guided beam, and very large pools ask you to narrow the selection.</dd>
+              <dt>Manual trades</dt><dd>Advanced one-off buy/sell controls. They are disabled for portfolio sessions.</dd>
+            </dl>
+          </section>
+          <section class="help-section">
+            <h3>Numbers</h3>
+            <dl class="help-list">
+              <dt>Return</dt><dd>Total change in the simulated account.</dd>
+              <dt>Sharpe</dt><dd>Return per unit of risk. Higher is better; — means there is not enough history yet.</dd>
+              <dt>Drawdown</dt><dd>The worst peak-to-trough fall in the session.</dd>
+              <dt>Win rate</dt><dd>The share of closed trades that ended positive.</dd>
+              <dt>DA</dt><dd>Dopamine, the fly's reward signal. Positive means the recent trade was rewarded.</dd>
+            </dl>
+          </section>
+        </div>
+
+        <section class="help-section help-honesty">
+          <h3>Why the test number matters</h3>
+          <p>The fly is <b>selected</b> on validation data, so the winning validation number is optimistic by construction. The <b>test</b> row is scored once on data the selection never saw. When the Combo Lab can use unseen tickers, it says so; that is the strongest check.</p>
+        </section>
+
+        <p class="help-note">Tip: the question mark button in the top bar reopens this guide at any time.</p>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-secondary" id="close-help-footer-btn">Close</button>
+        <button class="btn-primary" id="help-open-combo-btn">Open Combo Lab</button>
       </div>
     </div>
   </div>
 
   <!-- Toast container -->
-  <div id="toast-container"></div>
+  <div id="toast-container" aria-live="polite"></div>
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=34"></script>
+  <script src="/static/script.js?v=47"></script>
 </body>
 </html>
