@@ -82,6 +82,9 @@ function initTabs() {
       if (tab === 'stats') { drawRewardChartBig(); fetchLearningHistory(); fetchSimulationHistory(); }
       if (tab === 'sims')  { fetchSimulationHistory(); }
       if (tab === 'portfolio') { fetchPortfolioEval(); }
+      // The info tab's reward canvas is hidden at boot, so its client size is 0
+      // until the panel is shown. Redraw after the browser has laid it out.
+      if (tab === 'control') requestAnimationFrame(() => drawRewardChart());
     });
   });
 }
@@ -129,7 +132,7 @@ async function apiReset() {
     updateBrainViz(spikeData1024, 0.0);
     drawOscilloscope();
     updateNeuronCountDisplay();
-    toast('Episode reset ↺', '');
+    toast('Episode reset', '');
   } catch(e) {
     setStatus('error', 'API Offline');
   }
@@ -618,8 +621,8 @@ async function apiTrainBatch() {
     if (d.status === 'success') {
       lastTrainData = d;
       totalEpisodes = d.total_episodes;
-      qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
-      toast(`⚡ Trained 25 Episodes! Median: ${d.median_return_pct > 0 ? '+' : ''}${d.median_return_pct}% · Held-out: ${(d.heldout && d.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (d.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + d.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
+      qBrainBadge.textContent = `Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
+      toast(`Trained 25 Episodes. Median: ${d.median_return_pct > 0 ? '+' : ''}${d.median_return_pct}% · Held-out: ${(d.heldout && d.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (d.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + d.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
       // Auto-open the lab to show results
       openLabModal(d);
       await apiReset();
@@ -630,7 +633,7 @@ async function apiTrainBatch() {
     toast('Training failed: API offline', 'sell-toast');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = `<span class="btn-icon">⚡</span><span>Evolve Fly Brain (Train 25 Eps)</span>`;
+    btn.innerHTML = `<span>Evolve 25 eps</span>`;
     // Re-enable simulations button if we have data
     const simsBtn = $('train-sims-btn');
     if (simsBtn && totalEpisodes > 0) simsBtn.disabled = false;
@@ -640,13 +643,13 @@ async function apiTrainBatch() {
 async function apiRunSimulations() {
   const btn = $('train-sims-btn');
   btn.disabled = true;
-  btn.innerHTML = `<span class="btn-icon">🔄</span><span>Running 5 Simulations…</span>`;
+  btn.innerHTML = `<span>Running 5 sims…</span>`;
   
   try {
     let totalResults = null;
     // Run 5 simulations of 25 episodes each (server caps at 100 per call)
     for (let i = 0; i < 5; i++) {
-      btn.innerHTML = `<span class="btn-icon">🔄</span><span>Simulation ${i+1}/5…</span>`;
+      btn.innerHTML = `<span>Simulation ${i+1}/5…</span>`;
       const r = await fetch(`${API}/train_batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -657,7 +660,7 @@ async function apiRunSimulations() {
         totalResults = d;
         // Update progress
         totalEpisodes = d.total_episodes;
-        qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
+        qBrainBadge.textContent = `Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
         lastTrainData = d;
       } else {
         throw new Error('Training failed');
@@ -667,7 +670,7 @@ async function apiRunSimulations() {
     }
     
     if (totalResults) {
-      toast(`⚡ Completed 5 Simulations! Median: ${totalResults.median_return_pct > 0 ? '+' : ''}${totalResults.median_return_pct}% · Held-out: ${(totalResults.heldout && totalResults.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (totalResults.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + totalResults.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
+      toast(`Completed 5 Simulations. Median: ${totalResults.median_return_pct > 0 ? '+' : ''}${totalResults.median_return_pct}% · Held-out: ${(totalResults.heldout && totalResults.heldout.fly_excess_vs_buyhold_pct !== undefined) ? (totalResults.heldout.fly_excess_vs_buyhold_pct > 0 ? '+' : '') + totalResults.heldout.fly_excess_vs_buyhold_pct + '% vs buy&hold' : 'n/a'}`, 'buy-toast');
       // Auto-open the lab to show results
       openLabModal(totalResults);
       await apiReset();
@@ -678,7 +681,7 @@ async function apiRunSimulations() {
     toast('Simulations failed: API offline', 'sell-toast');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = `<span class="btn-icon">🔄</span><span>Run 5 Simulations</span>`;
+    btn.innerHTML = `<span>Run 5 sims</span>`;
   }
 }
 
@@ -786,8 +789,8 @@ function handleStepResult(d) {
   }
 
   // Toast on trades — 7-action space: 1-3 = Buy, 4-6 = Sell
-  if (d.action_idx >= 1 && d.action_idx <= 3) toast(`▲ ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'buy-toast');
-  if (d.action_idx >= 4 && d.action_idx <= 6) toast(`▼ ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'sell-toast');
+  if (d.action_idx >= 1 && d.action_idx <= 3) toast(`Buy · ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'buy-toast');
+  if (d.action_idx >= 4 && d.action_idx <= 6) toast(`Sell · ${d.action} @ $${d.portfolio.toLocaleString('en-US')}`, 'sell-toast');
 
   if (d.done) {
     if (autoPilot) {
@@ -800,8 +803,8 @@ function handleStepResult(d) {
         stopAuto();
       } else {
         toast(exploring
-          ? '🔄 Episode done — exploring, auto-looping…'
-          : '🔄 Episode done — auto-looping for continued learning…', '');
+          ? 'Episode complete · exploring, auto-looping…'
+          : 'Episode complete · auto-looping for continued learning…', '');
         // We return true to signal done so scheduleNext won't double-schedule
         setTimeout(async () => {
           if (autoPilot) {
@@ -811,7 +814,7 @@ function handleStepResult(d) {
         }, 800);
       }
     } else {
-      toast('🏁 Episode complete! Press Auto-Pilot to continue.', '');
+      toast('Episode complete · press Auto-Pilot to continue.', '');
     }
   }
 }
@@ -953,11 +956,11 @@ function drawOscilloscope() {
   ctx.clearRect(0, 0, W, H);
 
   const traces = [
-    { key: 'al',   arr: voltageHistory.al,   color: '#00e5ff', label: 'AL' },
-    { key: 'kc',   arr: voltageHistory.kc,   color: '#8c52ff', label: 'KC' },
-    { key: 'cx',   arr: voltageHistory.cx,   color: '#ffb703', label: 'CX' },
-    { key: 'dan',  arr: voltageHistory.dan,  color: '#ff3366', label: 'DAN' },
-    { key: 'mbon', arr: voltageHistory.mbon, color: '#00f59b', label: 'MBON' },
+    { key: 'al',   arr: voltageHistory.al,   color: '#5fd3e6', label: 'AL' },
+    { key: 'kc',   arr: voltageHistory.kc,   color: '#a78bfa', label: 'KC' },
+    { key: 'cx',   arr: voltageHistory.cx,   color: '#f0c36b', label: 'CX' },
+    { key: 'dan',  arr: voltageHistory.dan,  color: '#ef7d93', label: 'DAN' },
+    { key: 'mbon', arr: voltageHistory.mbon, color: '#6fd9a8', label: 'MBON' },
   ];
 
   // Auto-range over the live samples, with a floor on the span so a quiet
@@ -991,14 +994,14 @@ function drawOscilloscope() {
     ctx.strokeStyle = 'rgba(255,255,255,0.055)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(109,127,156,0.9)';
+    ctx.fillStyle = 'rgba(163,164,157,0.9)';
     ctx.fillText(v.toFixed(0), padL - 4, y);
   }
 
   // Spike threshold: the model fires when V > 0.7, which maps to -38.5 mV.
   if (-38.5 <= hi && -38.5 >= lo) {
     const y = yFor(-38.5);
-    ctx.strokeStyle = 'rgba(245,158,11,0.55)';
+    ctx.strokeStyle = 'rgba(232,184,106,0.55)';
     ctx.setLineDash([4, 3]);
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
@@ -1839,7 +1842,7 @@ function setupOrbitControls(wrap) {
   $('toggle-tracts-btn')?.addEventListener('click', () => {
     showTracts = !showTracts;
     const btn = $('toggle-tracts-btn');
-    if (btn) btn.textContent = showTracts ? '🔗 Synapses: ON' : '🔗 Synapses: OFF';
+    if (btn) btn.textContent = showTracts ? 'Synapses: ON' : 'Synapses: OFF';
     buildSynapticLines();
   });
 }
@@ -1870,18 +1873,11 @@ function drawPortfolioChart() {
   ctx.scale(dpr, dpr);
 
   ctx.clearRect(0, 0, W, H);
-  if (portfolioHistory.length < 2) return;
+  if (W < 10 || H < 10) return;
 
-  const data = portfolioHistory;
-  const minP = Math.min(...data) * 0.995;
-  const maxP = Math.max(...data) * 1.005;
-  const range = maxP - minP || 1;
-
-  const getX = i => (i / (data.length - 1)) * W;
-  const getY = v => H - ((v - minP) / range) * (H - 24) - 12;
-
-  // Grid lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  // Grid lines are drawn even before the first step, so the instrument reads as
+  // idle rather than broken.
+  ctx.strokeStyle = 'rgba(255,255,255,0.055)';
   ctx.lineWidth = 1;
   for (let s = 1; s <= 3; s++) {
     const gy = (H / 4) * s;
@@ -1890,6 +1886,25 @@ function drawPortfolioChart() {
     ctx.lineTo(W, gy);
     ctx.stroke();
   }
+
+  if (portfolioHistory.length < 2) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(163,164,157,0.72)';
+    ctx.font = `10px 'IBM Plex Mono', monospace`;
+    ctx.fillText('AWAITING FIRST STEP', W / 2, H / 2 - 4);
+    ctx.fillStyle = 'rgba(116,119,111,0.7)';
+    ctx.font = `9px 'IBM Plex Mono', monospace`;
+    ctx.fillText('start auto-pilot or advance the fly', W / 2, H / 2 + 13);
+    return;
+  }
+
+  const data = portfolioHistory;
+  const minP = Math.min(...data) * 0.995;
+  const maxP = Math.max(...data) * 1.005;
+  const range = maxP - minP || 1;
+
+  const getX = i => (i / (data.length - 1)) * W;
+  const getY = v => H - ((v - minP) / range) * (H - 24) - 12;
 
   // Gradient fill under Fly Trader
   const grad = ctx.createLinearGradient(0, 0, 0, H);
@@ -1911,7 +1926,7 @@ function drawPortfolioChart() {
   ctx.beginPath();
   ctx.moveTo(getX(0), getY(data[0]));
   for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
-  ctx.strokeStyle = isProfit ? '#22c55e' : '#ef4444';
+  ctx.strokeStyle = isProfit ? '#86d6a2' : '#e88585';
   ctx.lineWidth = 2.2;
   ctx.stroke();
 
@@ -1921,15 +1936,15 @@ function drawPortfolioChart() {
   ctx.setLineDash([4, 4]);
   ctx.moveTo(0, getY(bh));
   ctx.lineTo(W, getY(bh));
-  ctx.strokeStyle = '#f59e0b';
+  ctx.strokeStyle = '#e8b86a';
   ctx.lineWidth = 1.4;
   ctx.stroke();
   ctx.setLineDash([]);
 
   // Current value label
   const cY = getY(lastVal);
-  ctx.fillStyle = isProfit ? '#22c55e' : '#ef4444';
-  ctx.font = `500 10px 'JetBrains Mono', monospace`;
+  ctx.fillStyle = isProfit ? '#86d6a2' : '#e88585';
+  ctx.font = `500 10px 'IBM Plex Mono', monospace`;
   ctx.fillText(`$${lastVal.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, W - 90, Math.max(14, Math.min(H - 4, cY - 4)));
 }
 
@@ -1986,7 +2001,7 @@ function _drawRewardOnCanvas(canvas) {
   ctx.beginPath();
   ctx.moveTo(getX(0), getY(data[0]));
   for (let i = 1; i < data.length; i++) ctx.lineTo(getX(i), getY(data[i]));
-  ctx.strokeStyle = '#22d3ee';
+  ctx.strokeStyle = '#63c8b8';
   ctx.lineWidth = 1.6;
   ctx.stroke();
 }
@@ -2023,7 +2038,7 @@ function drawHeatmap(spikes) {
       ctx.fillStyle = grd;
       ctx.fillRect(Math.max(0, x - cellW * 0.2), Math.max(0, y - cellH * 0.2), cellW * 1.4, cellH * 1.4);
     } else {
-      ctx.fillStyle = hex + '2a';
+      ctx.fillStyle = hex + '12';
       ctx.fillRect(x, y, cellW, cellH);
     }
   }
@@ -2040,7 +2055,7 @@ function drawHeatmap(spikes) {
   });
 
   // Region labels on side
-  ctx.font = `bold 7px 'JetBrains Mono', monospace`;
+  ctx.font = `bold 7px 'IBM Plex Mono', monospace`;
   const regionLabels = [
     { label: 'AL', startRow: 0, color: REGION_HEX[0] },
     { label: 'KC', startRow: 4, color: REGION_HEX[1] },
@@ -2133,9 +2148,9 @@ function updateNeuronCountDisplay() {
     }
   });
   
-  // Update brain badge to include N_NEURONS
+  // Update the brain generation badge
   if (qBrainBadge) {
-    qBrainBadge.textContent = `🧠 Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes} · ${N_NEURONS}-LIF Neurons`;
+    qBrainBadge.textContent = `Gen ${Math.floor(totalEpisodes / 25) + 1} · Ep ${totalEpisodes}`;
   }
   
   // Update activity bars summary if it exists
@@ -2214,7 +2229,15 @@ function populateLab(d) {
   if (labLoss) labLoss.textContent = (d.avg_loss || 0).toFixed(5);
 
   const labEp = $('lab-total-episodes');
-  if (labEp) labEp.textContent = d.total_episodes || 0;
+  if (labEp) {
+    // Training responses carry total_episodes; saved simulation runs carry
+    // total_episodes_after. Fall back to the last plotted episode so the lab
+    // never reports "0" for a populated run.
+    const lastEpisode = Array.isArray(d.episodes_data) && d.episodes_data.length
+      ? d.episodes_data[d.episodes_data.length - 1].episode
+      : null;
+    labEp.textContent = d.total_episodes ?? d.total_episodes_after ?? lastEpisode ?? totalEpisodes ?? 0;
+  }
 
   // Episode chart
   if (d.episodes_data && d.episodes_data.length > 0) {
@@ -2300,13 +2323,13 @@ function drawEvolutionChart(episodes) {
     });
   }
 
-  drawLine(returns, '#22c55e', 2.5);
-  drawLine(winrates, '#8c52ff', 1.8);
-  drawLine(losses, '#ff3366', 1.4);
+  drawLine(returns, '#86d6a2', 2.5);
+  drawLine(winrates, '#a78bfa', 1.8);
+  drawLine(losses, '#e88585', 1.4);
 
   // Episode numbers along bottom
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = `9px 'JetBrains Mono', monospace`;
+  ctx.font = `9px 'IBM Plex Mono', monospace`;
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 10))) {
     ctx.fillText(`${episodes[i].episode}`, gx(i) - 4, H - 4);
   }
@@ -2406,10 +2429,10 @@ function setStatus(state, text) {
 let portfolioData = null;
 
 const PF_COLORS = {
-  fly:             '#00e5ff',
-  'buy&hold':      '#22c55e',
-  trend200:        '#ffb703',
-  'mom120-top3-m': '#8c52ff',
+  fly:             '#5fd3e6',
+  'buy&hold':      '#86d6a2',
+  trend200:        '#e8b86a',
+  'mom120-top3-m': '#a78bfa',
 };
 const PF_LABELS = {
   fly:             'Fly',
@@ -2537,8 +2560,8 @@ function drawPortfolioEquityChart() {
   const gx = i => padL + (i / (n - 1)) * cW;
   const gy = v => padT + cH - ((v - ymin) / ((ymax - ymin) || 1)) * cH;
 
-  ctx.font = '9px JetBrains Mono, monospace';
-  ctx.fillStyle = '#6d7f9c';
+  ctx.font = '9px IBM Plex Mono, monospace';
+  ctx.fillStyle = '#a3a49d';
   ctx.textAlign = 'right';
   for (let t = 0; t <= 4; t++) {
     const v = ymin + (ymax - ymin) * t / 4;
@@ -2613,9 +2636,23 @@ function drawLearningHistoryChart() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
 
+  // Grid + idle state so the card never looks like a hole in the layout.
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let s = 1; s <= 3; s++) {
+    const y = 12 + ((H - 30) / 4) * s;
+    ctx.beginPath(); ctx.moveTo(28, y); ctx.lineTo(W - 8, y); ctx.stroke();
+  }
+
   const data = learningHistory.slice(-50);
   const n = data.length;
-  if (n < 2) return;
+  if (n < 2) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(163,164,157,0.7)';
+    ctx.font = `10px 'IBM Plex Mono', monospace`;
+    ctx.fillText('NO EPISODE HISTORY YET', W / 2, H / 2);
+    return;
+  }
 
   const returns  = data.map(e => e.return_pct);
   const sharpe   = data.map(e => e.sharpe);
@@ -2634,12 +2671,7 @@ function drawLearningHistoryChart() {
   const gy = (v) => padT + cH - ((v - minV) / rangeV) * cH;
 
   // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  for (let s = 1; s <= 3; s++) {
-    const y = padT + (cH / 4) * s;
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-  }
+  // (drawn above so the idle state also reads as an instrument)
 
   // Return % (green)
   ctx.beginPath();
@@ -2647,7 +2679,7 @@ function drawLearningHistoryChart() {
     const x = gx(i), y = gy(e.return_pct);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#22c55e';
+  ctx.strokeStyle = '#86d6a2';
   ctx.lineWidth = 1.8;
   ctx.stroke();
 
@@ -2657,7 +2689,7 @@ function drawLearningHistoryChart() {
     const x = gx(i), y = gy(e.sharpe);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#00e5ff';
+  ctx.strokeStyle = '#5fd3e6';
   ctx.lineWidth = 1.4;
   ctx.stroke();
 
@@ -2667,13 +2699,13 @@ function drawLearningHistoryChart() {
     const x = gx(i), y = gy(e.win_rate);
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = '#8c52ff';
+  ctx.strokeStyle = '#a78bfa';
   ctx.lineWidth = 1.2;
   ctx.stroke();
 
   // Episode numbers
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  ctx.font = `9px 'JetBrains Mono', monospace`;
+  ctx.fillStyle = 'rgba(163,164,157,0.55)';
+  ctx.font = `9px 'IBM Plex Mono', monospace`;
   for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) {
     ctx.fillText(`${data[i].episode}`, gx(i) - 4, H - 4);
   }
@@ -2747,9 +2779,9 @@ function renderSimulationHistoryUI() {
     if (simulationHistory.length === 0) {
       listEl.innerHTML = `
         <div class="sim-empty-state">
-          <span style="font-size:1.6rem;opacity:.6">🧪</span>
+          <span class="empty-mark">SIM</span>
           <p>No simulations run yet.</p>
-          <p class="sim-empty-sub">Click <b>"Run 5 Simulations"</b> or <b>"Evolve Fly Brain"</b> to generate training history.</p>
+          <p class="sim-empty-sub">Click <b>"Run 5 sims"</b> or <b>"Evolve 25 eps"</b> to generate training history.</p>
         </div>`;
     } else {
       listEl.innerHTML = '';
@@ -2800,9 +2832,9 @@ function renderSimulationHistoryUI() {
           </div>
           <div class="sim-card-actions">
             <button class="sim-btn-inspect" data-run-id="${run.run}">
-              🔬 Inspect in Lab
+              Inspect in Lab
             </button>
-            ${epData.length > 0 ? `<button class="sim-toggle-btn" data-run-toggle="${run.run}">▼ Show Episodes (${epData.length})</button>` : ''}
+            ${epData.length > 0 ? `<button class="sim-toggle-btn" data-run-toggle="${run.run}">Show Episodes (${epData.length})</button>` : ''}
           </div>
           ${epData.length > 0 ? `
             <div class="sim-episodes-table-wrap" id="sim-episodes-${run.run}" style="display:none">
@@ -2861,7 +2893,7 @@ function renderSimulationHistoryUI() {
           if (wrap) {
             const isHidden = wrap.style.display === 'none';
             wrap.style.display = isHidden ? 'block' : 'none';
-            btn.textContent = isHidden ? `▲ Hide Episodes` : `▼ Show Episodes (${wrap.querySelectorAll('tbody tr').length})`;
+            btn.textContent = isHidden ? `Hide Episodes` : `Show Episodes (${wrap.querySelectorAll('tbody tr').length})`;
           }
         });
       });
@@ -2898,7 +2930,7 @@ function renderSimulationHistoryUI() {
 }
 function startAuto() {
   autoPilot = true;
-  qAutoBtn.textContent = '⏹ Stop Auto-Pilot';
+  qAutoBtn.textContent = 'Stop Auto-Pilot';
   qAutoBtn.classList.add('running');
   scheduleNext();
 }
@@ -2906,7 +2938,7 @@ function startAuto() {
 function stopAuto() {
   autoPilot = false;
   clearTimeout(autoTimer);
-  qAutoBtn.textContent = '▶ Start Auto-Pilot';
+  qAutoBtn.textContent = 'Start Auto-Pilot';
   qAutoBtn.classList.remove('running');
 }
 
@@ -2977,7 +3009,7 @@ $('view-mode').addEventListener('change', e => {
     if (brainShellMesh) brainShellMesh.visible = true;
   }
   const tractBtn = $('toggle-tracts-btn');
-  if (tractBtn) tractBtn.textContent = showTracts ? '🔗 Synapses: ON' : '🔗 Synapses: OFF';
+  if (tractBtn) tractBtn.textContent = showTracts ? 'Synapses: ON' : 'Synapses: OFF';
   buildSynapticLines();
   updateBrainViz(spikeData1024, currentDopamine);
 });
