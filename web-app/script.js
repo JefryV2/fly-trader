@@ -1821,7 +1821,7 @@ async function initThree() {
   if (!wrap) return;
 
   const W = Math.max(wrap.clientWidth, 320);
-  const H = Math.max(wrap.clientHeight, 330);
+  const H = Math.max(wrap.clientHeight, 300);
 
   threeScene = new THREE.Scene();
   threeCamera = new THREE.PerspectiveCamera(46, W / H, 0.1, 500);

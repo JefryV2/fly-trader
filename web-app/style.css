@@ -848,7 +848,7 @@ button { color: inherit; }
 .brain-card {
   flex: 1;
   display: flex; flex-direction: column;
-  min-height: 560px;
+  min-height: 710px;
   padding: 14px;
   background: var(--panel);
   overflow: hidden;
@@ -920,7 +920,7 @@ button { color: inherit; }
 .np-filter-btn.np-dan.active { color: var(--dan); }
 
 #brain-canvas-wrap {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 300px;
   width: 100%;
   position: relative;
@@ -931,13 +931,14 @@ button { color: inherit; }
 }
 #brain-canvas { width: 100%; height: 100%; display: block; position: relative; z-index: 1; }
 
-/* Oscilloscope dock */
+/* Membrane potential traces (separate from the 3D view so neither overlaps) */
 .oscilloscope-tray {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  z-index: 2;
-  background: rgba(9, 9, 11, 0.94);
-  border-top: 1px solid var(--line);
-  padding: 6px 12px 7px;
+  flex-shrink: 0;
+  margin-top: 8px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px 9px;
   pointer-events: none;
 }
 .osc-header { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 3px; }
@@ -1802,6 +1803,7 @@ button { color: inherit; }
   .metric-pill:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
   .metric-pill:nth-child(4) { border-top: 1px solid var(--line); }
   .brain-hud-badges { display: none; }
+  .synapse-note { display: none; }
   .lab-kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .sim-meta-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 3px; }
 }
@@ -1819,7 +1821,6 @@ button { color: inherit; }
   }
   #left-col, #right-col, #centre-col { overflow: visible; min-width: 0; }
   .tab-panel { overflow: visible; }
-  .brain-card { min-height: 620px; }
   .lab-two-col { grid-template-columns: 1fr; }
   .help-grid { grid-template-columns: 1fr; }
   .sim-meta-row { grid-template-columns: repeat(5, minmax(0, 1fr)); }

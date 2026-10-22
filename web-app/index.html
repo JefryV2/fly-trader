@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=36" />
+  <link rel="stylesheet" href="/static/style.css?v=39" />
 </head>
 <body>
 
@@ -283,22 +283,24 @@
           <button class="np-filter-btn np-dan"  data-region="agent"><span data-neuron-count="1024">1,024-LIF</span> Circuit</button>
         </div>
 
-        <!-- 3D canvas + oscilloscope overlay -->
+        <!-- 3D canvas -->
         <div id="brain-canvas-wrap">
           <canvas id="brain-canvas"></canvas>
-          <div class="oscilloscope-tray" id="oscilloscope-tray">
-            <div class="osc-header">
-              <span class="osc-title">Membrane Potential Vm · region peak (p99)</span>
-              <span class="osc-threshold">— −38.5 mV spike threshold</span>
-            </div>
-            <canvas id="oscilloscope-canvas" width="800" height="92"></canvas>
-            <div class="osc-legend">
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--al)"></div>AL<span class="osc-leg-val" id="osc-val-al">—</span></div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--kc)"></div>KC<span class="osc-leg-val" id="osc-val-kc">—</span></div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--cx)"></div>CX<span class="osc-leg-val" id="osc-val-cx">—</span></div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--dan)"></div>DAN<span class="osc-leg-val" id="osc-val-dan">—</span></div>
-              <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--mbon)"></div>MBON<span class="osc-leg-val" id="osc-val-mbon">—</span></div>
-            </div>
+        </div>
+
+        <!-- Membrane potential traces -->
+        <div class="oscilloscope-tray" id="oscilloscope-tray">
+          <div class="osc-header">
+            <span class="osc-title">Membrane Potential Vm · region peak (p99)</span>
+            <span class="osc-threshold">— −38.5 mV spike threshold</span>
+          </div>
+          <canvas id="oscilloscope-canvas" width="800" height="92"></canvas>
+          <div class="osc-legend">
+            <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--al)"></div>AL<span class="osc-leg-val" id="osc-val-al">—</span></div>
+            <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--kc)"></div>KC<span class="osc-leg-val" id="osc-val-kc">—</span></div>
+            <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--cx)"></div>CX<span class="osc-leg-val" id="osc-val-cx">—</span></div>
+            <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--dan)"></div>DAN<span class="osc-leg-val" id="osc-val-dan">—</span></div>
+            <div class="osc-leg-item"><div class="osc-leg-dot" style="background:var(--mbon)"></div>MBON<span class="osc-leg-val" id="osc-val-mbon">—</span></div>
           </div>
         </div>
 
@@ -862,6 +864,6 @@
 
   <!-- Three.js (local) + App logic -->
   <script src="/static/three.min.js"></script>
-  <script src="/static/script.js?v=50"></script>
+  <script src="/static/script.js?v=51"></script>
 </body>
 </html>
