@@ -18,8 +18,10 @@ web-app/checkpoints/*.pt
 *.pt.latest
 *.zip
 *.pkl
+*.log
 runs/
 mlruns/
+web-app/checkpoints/simulation_history.json
 
 # Node (fly_connectome template)
 fly_connectome/node_modules/
@@ -30,3 +32,9 @@ fly_connectome/dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# Deployed demo artifacts (small enough to ship; experiments stay ignored)
+!web-app/checkpoints/fly_brain.pt
+!web-app/checkpoints/portfolio_fly.pt
+!flywire_weights/connectome_weights.pkl
+!flywire_weights/connectome_weights_verified.pkl
