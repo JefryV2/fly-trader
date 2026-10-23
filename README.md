@@ -1699,7 +1699,7 @@ Built with [fly-connectome-template](https://github.com/cobanov/fly-connectome-t
 - **Flybody** — Turaga Lab, Apache License 2.0. Source and notices: `fly_connectome/public/data/flybody/NOTICE.md`.
 - **FlyWire v783** — connectome export used for the optional synaptic wiring; download/rebuild instructions are in *Connectome Mode* above.
 
-A top-level license for the original FlyTrader code has not been selected. The third-party components retain their own licenses.
+The original FlyTrader code is released under the [MIT License](LICENSE). The third-party components and datasets retain their own licenses described above.
 
 ---
 
