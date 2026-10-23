@@ -116,8 +116,11 @@ The pipeline:
   walk-forward safe. Existing checkpoints should be retrained before comparing
   new numbers with the tables in this file.
 - `fly_connectome/` is an unmodified upstream React template, used only for its
-  atlas binaries.
-- `flywire_data/` is duplicated inside `web-app/` (~96 MB ×2).
+  atlas binaries. It is a git submodule with the required upstream credit.
+- Local data/cache directories are not committed: `data/` (OHLCV),
+  `flywire_data/` (raw FlyWire), and most experiment checkpoints. The deployed
+  demo checkpoints and the two connectome caches are deliberate small
+  exceptions; see *Data and artifacts*.
 
 ## Project Structure
 ```
@@ -135,8 +138,9 @@ fly-trader/
 │   run_portfolio.py           # Portfolio baselines (buy&hold / trend200 / momentum) + fly (any gate)
 │   xsection.py                # Cross-sectional (universe-relative) features
 │   build_xsection.py          # Build data/xsection_panel.npz
-│   data_fetch.py              # Historical data downloader
-│   evaluate.py                # (legacy) real‑time evaluation script
+│   data_fetch.py              # Reproducible OHLCV downloader (manifest-aware)
+│   start_server.ps1           # Windows convenience launcher for the dashboard
+│   .gitmodules                # Pins the upstream fly-connectome-template submodule
 │   scripts/
 │   │   backtest.py            # Honest out‑of‑sample evaluation harness
 │   │   rebuild_connectome.py  # Rebuild connectome weights with auditable provenance
@@ -150,17 +154,49 @@ fly-trader/
 │   reports/                    # JSON artifacts for the studies above
 │   tests/                     # pytest suite (env invariants, masking, metrics)
 │   web-app/                   # FastAPI server + front‑end demo
+│   web-app/checkpoints/       # Deployed demo checkpoints (other runs stay ignored)
 │   flywire_data/              # FlyWire v783 raw files (Completeness csv + Connectivity parquet)
 │   flywire_weights/           # Cached processed weight matrices
-│   fly_connectome/            # Upstream React template (atlas binaries only)
+│   fly_connectome/            # Upstream git submodule (atlas binaries only)
 └── data/                      # Downloaded OHLCV csv per ticker
 ```
 
 ## Install
+Requires Python 3.11+ (verified on 3.14).
 ```bash
+git clone --recurse-submodules <your-fork-or-repo-url>
 cd fly-trader
 python -m pip install -r requirements.txt
 ```
+If the repository was cloned without submodules:
+```bash
+git submodule update --init --recursive
+```
+
+## Data and artifacts
+The raw OHLCV CSVs and FlyWire exports are deliberately not committed. The
+deployed demo checkpoints (`fly_brain.pt`, `portfolio_fly.pt`) and the two
+connectome caches are small enough to ship, so a clean clone only needs the
+OHLCV snapshot below to run; experiment checkpoints stay local and gitignored.
+
+Recreate the OHLCV snapshot from the checked-in manifest (existing files are
+skipped; add `--force` to refresh):
+```bash
+python data_fetch.py --from-manifest data_manifest.json
+python build_xsection.py          # only needed for cross-sectional features
+```
+`data_manifest.json` records SHA-256, row counts and date coverage. Regenerate
+it after changing the local data:
+```bash
+python scripts/data_manifest.py
+```
+FlyWire raw files auto-download on the first connectome run, or explicitly:
+```bash
+python -c "from fly_brain import download_flywire_data; download_flywire_data()"
+python scripts/rebuild_connectome.py --neurons 1024 --normalize degree
+```
+The dashboard writes runtime state to
+`web-app/checkpoints/simulation_history.json`; that file is ignored.
 
 ## Quick‑Start
 1. **Run the tests**
@@ -169,12 +205,13 @@ python -m pip install -r requirements.txt
    ```
 2. **Train** (time‑split: train = everything before `2023‑07`, val
    `2023‑07 → 2023‑12`, test `2024`), selecting the best checkpoint by
-   validation Sharpe:
+   validation excess return (`--select-by val_excess`, the default):
    ```bash
    python train.py --ticker AAPL
    python train.py --all-tickers --episodes 40
    ```
-3. **Evaluate honestly (out‑of‑sample)** against baselines:
+3. **Evaluate honestly (out‑of‑sample)** against baselines. The default
+   checkpoint is the deployed `fly_brain.pt`; the old `best` alias is retired:
    ```bash
    python scripts/backtest.py --ticker AAPL --split test
    python scripts/backtest.py --all-tickers --split test --repair
@@ -183,6 +220,7 @@ python -m pip install -r requirements.txt
    ```bash
    python -m uvicorn web-app.server:app --port 8000
    ```
+   On Windows, `.\start_server.ps1` does the same from the repository root.
    The dashboard's **Portfolio** tab runs the held‑out cross‑section backtest
    (`GET /portfolio_eval`): the fly versus buy & hold, trend 200d and momentum
    rotation on the unseen ticker universe, with equity curves. It serves
@@ -1649,9 +1687,22 @@ guard-rejected seeds explicitly for this reason.
 | P2 | ✅ `scripts/seed_sweep.py` reports multi-seed confidence intervals (portfolio recipe: n=10, +290.2 pp mean, [214.0, 366.4] pp) |
 | P2 | ✅ Single-asset evaluation-path interval (+0.15 pp, [−2.28, +2.58] pp, n=10) and **3-seed training interval** (+44.4 pp, [−96.0, +184.8] pp, 2/3 positive). The training interval includes zero; no single-asset edge claim survives. |
 | P2 | ✅ `scripts/cost_stress.py` reruns the portfolio checkpoint at 0/10/25/50/100 bps: cycle excess +353 → +279 pp, 2022 +15 → +11 pp, 2024 −6 → −12 pp. Slippage/impact remain unmodelled. |
-| P2 | DONE - dead best-score checkpoint code removed; `flywire_data/` duplication and legacy scripts remain |
+| P2 | DONE - dead best-score checkpoint code removed; root scratch scripts, duplicate `web-app/` data caches, and stale experiment checkpoints cleaned out of the release tree |
 
 ---
-### How to Contribute
+
+## Credits and third-party notices
+
+Built with [fly-connectome-template](https://github.com/cobanov/fly-connectome-template) by [Mert Cobanov](https://github.com/cobanov). The `fly_connectome/` submodule is kept unmodified; the dashboard carries the required linked credit in the left rail and the in-app guide.
+
+- **MaleCNS v1.0 soma atlas** — FlyEM / HHMI Janelia, University of Cambridge, MRC Laboratory of Molecular Biology, and Google Research. [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Source and notices: `fly_connectome/public/data/brain-atlas/NOTICE.md`.
+- **Flybody** — Turaga Lab, Apache License 2.0. Source and notices: `fly_connectome/public/data/flybody/NOTICE.md`.
+- **FlyWire v783** — connectome export used for the optional synaptic wiring; download/rebuild instructions are in *Connectome Mode* above.
+
+A top-level license for the original FlyTrader code has not been selected. The third-party components retain their own licenses.
+
+---
+
+## How to Contribute
 Open issues or PRs for new instruments, a faster spiking‑network wrapper, better
 fly‑brain/strategy visualisations, or improved connectome mapping.

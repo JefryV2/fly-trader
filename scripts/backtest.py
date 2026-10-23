@@ -12,7 +12,7 @@ Usage
 -----
     python scripts/backtest.py --ticker AAPL --split test
     python scripts/backtest.py --ticker NVDA --all-splits
-    python scripts/backtest.py --all-tickers --split test --checkpoint best
+    python scripts/backtest.py --all-tickers --split test --checkpoint latest
 
 Strategies compared
 -------------------
@@ -46,9 +46,11 @@ def load_agent(args, obs_dim, device="cpu"):
         N_NEURONS=args.n_neurons,
     )
     ckpt = None
-    if args.checkpoint == "best":
-        ckpt = CHECKPOINT_DIR / "fly_brain_best.pt"
-    elif args.checkpoint == "latest":
+    if args.checkpoint == "latest":
+        ckpt = CHECKPOINT_DIR / "fly_brain.pt"
+    elif args.checkpoint == "best":
+        # Retired alias: the old fly_brain_best.pt artifact is no longer shipped.
+        print("[checkpoint] 'best' is retired; using deployed fly_brain.pt")
         ckpt = CHECKPOINT_DIR / "fly_brain.pt"
     elif args.checkpoint:
         ckpt = Path(args.checkpoint)
@@ -133,8 +135,8 @@ def main():
     p.add_argument("--all-tickers", action="store_true")
     p.add_argument("--split", default="test", choices=list(SPLITS))
     p.add_argument("--all-splits", action="store_true")
-    p.add_argument("--checkpoint", default="best",
-                   help="'best', 'latest', a path, or '' for fresh init")
+    p.add_argument("--checkpoint", default="latest",
+                   help="'latest' (deployed fly_brain.pt), a path, or '' for fresh init")
     p.add_argument("--deterministic", action="store_true", default=True)
     p.add_argument("--stochastic", dest="deterministic", action="store_false")
     p.add_argument("--temperature", type=float, default=1.0)

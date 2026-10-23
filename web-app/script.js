@@ -3,7 +3,9 @@
    MaleCNS 1024-LIF Drosophila Connectome Visualizer & RL Trader
    ═══════════════════════════════════════════════════════════════ */
 
-const API = 'http://127.0.0.1:8000';
+// Same-origin by default, so the dashboard works on any host/port (and behind
+// a reverse proxy). Set window.FLYTRADER_API before this script to override.
+const API = (window.FLYTRADER_API || window.location.origin || '').replace(/\/$/, '');
 
 /* ─────────────────────────────────────────────
    State
@@ -1512,7 +1514,6 @@ async function loadMaleCnsAtlas() {
 
     brainCenter.set(0, 0, 0);
     buildMaleCnsPointsMesh();
-    console.log(`MaleCNS v1.0 biological brain loaded successfully: ${maleCnsCount.toLocaleString()} measured somata.`);
   } catch (err) {
     console.warn('Could not load MaleCNS binary atlas, using procedural anatomical fallback:', err);
   }
@@ -1955,7 +1956,6 @@ async function loadConnectomeEdges() {
     if (note) {
       note.textContent = `${n.toLocaleString()} of ${synapseTotal.toLocaleString()} FlyWire synapses (strongest |w|) · 5 structural blocks, spatially localized`;
     }
-    console.log(`Connectome: ${n} of ${synapseTotal} synapses drawn`);
   } catch (err) {
     console.warn('Could not load connectome edges — drawing anatomy only:', err);
     connectomeEdges = null;

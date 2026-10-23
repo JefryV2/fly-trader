@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════════════════════════
    FlyTrader — Ember Terminal
-   The music player's premium dark system: obsidian, zinc, amber.
-   Flat surfaces, 1px rules, 8px structural radii, no glass, no glow.
+   Obsidian, zinc, amber. Flat surfaces, 1px rules, 8px structural radii;
+   no glass, no glow.
    ══════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -1776,6 +1776,24 @@ button { color: inherit; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .toast.buy-toast { border-left-color: var(--green); }
 .toast.sell-toast { border-left-color: var(--red); }
+
+/* ── CREDITS ─────────────────────────────────────────────────────── */
+.app-credit,
+.help-credit {
+  margin: 12px 2px 4px;
+  color: var(--txt-dim);
+  font-size: 9px;
+  line-height: 1.65;
+}
+.help-credit { margin-top: 14px; font-size: 10px; }
+.app-credit a,
+.help-credit a {
+  color: var(--txt-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.app-credit a:hover,
+.help-credit a:hover { color: var(--amber-hi); }
 
 /* ── SCROLLBARS ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }

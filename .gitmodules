@@ -1,0 +1,3 @@
+[submodule "fly_connectome"]
+	path = fly_connectome
+	url = https://github.com/cobanov/fly-connectome-template.git
