@@ -1,0 +1,444 @@
+{
+  "mode": "single",
+  "created_at": "2026-10-23T13:24:01",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "reproduce": "scripts/seed_sweep.py --mode single --seeds 0,1,2 --tickers TSLA,NVDA,MSFT --plan cycle_b --episodes 100 --eval-every 10 --target-entropy 0.5 --select-by val_excess --indicator-norm per_feature --n-step 5 --lr-decay 0.99 --val-seeds 2 --eval-seeds 1 --out-dir reports\\seed_sweep --json-out reports\\single_train_seed_sweep.json --keep-checkpoints",
+  "recipe": {
+    "tickers": [
+      "TSLA",
+      "NVDA",
+      "MSFT"
+    ],
+    "holdout": [],
+    "plan": "cycle_b",
+    "episodes": 100,
+    "imitate_episodes": 10,
+    "rebalance_every": 21,
+    "gate": null,
+    "alloc_min_k": 0,
+    "alloc_max_k": null,
+    "full_readout": false,
+    "cost": 0.001,
+    "turnover_penalty": 0.002,
+    "sample": false,
+    "target_entropy": 0.5,
+    "lr_decay": 0.99,
+    "n_step": 5,
+    "reward_mode": "excess",
+    "mask_preset": "honest",
+    "select_by": "val_excess",
+    "val_seeds": 2,
+    "eval_seeds": 1
+  },
+  "summary": {
+    "test_fly": {
+      "n": 3,
+      "mean": 282.89472103161114,
+      "sd": 56.51958865183873,
+      "se": 32.631599722626014,
+      "ci_low": 142.49227940896253,
+      "ci_high": 423.29716265425975,
+      "interval": "t"
+    },
+    "test_buyhold": {
+      "n": 3,
+      "mean": 238.46813125385054,
+      "sd": 0.0,
+      "se": 0.0,
+      "ci_low": 238.46813125385054,
+      "ci_high": 238.46813125385054,
+      "interval": "t"
+    },
+    "test_excess": {
+      "n": 3,
+      "mean": 44.42658977776059,
+      "sd": 56.51958865183873,
+      "se": 32.631599722626014,
+      "ci_low": -95.97585184488801,
+      "ci_high": 184.8290314004092,
+      "interval": "t",
+      "positive_seeds": 2,
+      "positive_fraction": 0.6666666666666666
+    },
+    "test_sharpe": {
+      "n": 3,
+      "mean": 0.8800485938576768,
+      "sd": 0.07396699272603918,
+      "se": 0.042704863161525816,
+      "ci_low": 0.6963043978021605,
+      "ci_high": 1.063792789913193,
+      "interval": "t"
+    },
+    "test_maxdd": {
+      "n": 3,
+      "mean": 53.68299258311922,
+      "sd": 5.995606357464911,
+      "se": 3.4615649444373986,
+      "ci_low": 38.78908072573061,
+      "ci_high": 68.57690444050785,
+      "interval": "t"
+    },
+    "val_fly": {
+      "n": 3,
+      "mean": 11.476446018989982,
+      "sd": 5.4984621901834725,
+      "se": 3.174538625631407,
+      "ci_low": -2.182491264278097,
+      "ci_high": 25.135383302258063,
+      "interval": "t"
+    },
+    "val_excess": {
+      "n": 3,
+      "mean": 2.222298717076083,
+      "sd": 5.4984621901834725,
+      "se": 3.174538625631407,
+      "ci_low": -11.436638566191997,
+      "ci_high": 15.881236000344161,
+      "interval": "t"
+    },
+    "guard_failed_seeds": 0
+  },
+  "rows": [
+    {
+      "validation": {
+        "fly": 12.16405576976903,
+        "buyhold": 9.2541473019139,
+        "excess": 2.9099084678551304,
+        "sharpe": 1.1219639049412382,
+        "maxdd": 18.63892425746012,
+        "bh_maxdd": 20.89408780427873,
+        "per_ticker": {
+          "TSLA": {
+            "fly": -4.446978686985188,
+            "buyhold": -14.586434969801514,
+            "excess": 10.139456282816326,
+            "sharpe": 0.05413585328667278,
+            "trades": 8,
+            "maxdd": 24.874365111154113,
+            "bh_maxdd": 29.46187545065162
+          },
+          "NVDA": {
+            "fly": 30.170994250021373,
+            "buyhold": 30.57996246292214,
+            "excess": -0.408968212900767,
+            "sharpe": 1.9031515573153737,
+            "trades": 6,
+            "maxdd": 22.631918607016427,
+            "bh_maxdd": 24.452199753701514
+          },
+          "MSFT": {
+            "fly": 10.76815174627091,
+            "buyhold": 11.768914412621074,
+            "excess": -1.0007626663501643,
+            "sharpe": 1.4086043042216685,
+            "trades": 8,
+            "maxdd": 8.410489054209819,
+            "bh_maxdd": 8.768188208483057
+          }
+        }
+      },
+      "test": {
+        "fly": 219.3020391884606,
+        "buyhold": 238.46813125385054,
+        "excess": -19.166092065389932,
+        "sharpe": 0.7954347647321174,
+        "maxdd": 59.37796032415486,
+        "bh_maxdd": 59.03859852982908,
+        "per_ticker": {
+          "TSLA": {
+            "fly": 61.2374360116538,
+            "buyhold": 73.20581958523695,
+            "excess": -11.968383573583154,
+            "sharpe": 0.534251048386208,
+            "trades": 46,
+            "maxdd": 73.66915638128305,
+            "bh_maxdd": 73.63221744219076
+          },
+          "NVDA": {
+            "fly": 550.2388265944271,
+            "buyhold": 591.3948705514014,
+            "excess": -41.15604395697426,
+            "sharpe": 1.292956143865285,
+            "trades": 42,
+            "maxdd": 67.65410068272789,
+            "bh_maxdd": 66.33509934793534
+          },
+          "MSFT": {
+            "fly": 46.42985495930084,
+            "buyhold": 50.80370362491327,
+            "excess": -4.373848665612428,
+            "sharpe": 0.5590971019448592,
+            "trades": 76,
+            "maxdd": 36.810623908453664,
+            "bh_maxdd": 37.148478799361136
+          }
+        }
+      },
+      "guard_failed": false,
+      "seed": 0,
+      "train_seconds": 594.1,
+      "eval_seconds": 19.3,
+      "command": [
+        "C:\\Users\\aziz dhouib\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+        "C:\\Users\\aziz dhouib\\.gemini\\antigravity-ide\\scratch\\fly-trader\\train.py",
+        "--tickers",
+        "TSLA,NVDA,MSFT",
+        "--plan",
+        "cycle_b",
+        "--episodes",
+        "100",
+        "--eval-every",
+        "10",
+        "--reward-mode",
+        "excess",
+        "--mask-preset",
+        "honest",
+        "--select-by",
+        "val_excess",
+        "--indicator-norm",
+        "per_feature",
+        "--val-seeds",
+        "2",
+        "--lr-decay",
+        "0.99",
+        "--n-step",
+        "5",
+        "--seed",
+        "0",
+        "--out",
+        "reports\\seed_sweep\\single_seed0.pt",
+        "--target-entropy",
+        "0.5"
+      ]
+    },
+    {
+      "validation": {
+        "fly": 16.59876235336634,
+        "buyhold": 9.2541473019139,
+        "excess": 7.34461505145244,
+        "sharpe": 1.3903986588133428,
+        "maxdd": 16.41530942093929,
+        "bh_maxdd": 20.89408780427873,
+        "per_ticker": {
+          "TSLA": {
+            "fly": -7.1249286701048185,
+            "buyhold": -14.586434969801514,
+            "excess": 7.461506299696696,
+            "sharpe": -0.047987058872375345,
+            "trades": 29,
+            "maxdd": 26.86761334122585,
+            "bh_maxdd": 29.46187545065162
+          },
+          "NVDA": {
+            "fly": 45.91027183914842,
+            "buyhold": 30.57996246292214,
+            "excess": 15.330309376226282,
+            "sharpe": 2.7720903610069954,
+            "trades": 30,
+            "maxdd": 14.261661583603939,
+            "bh_maxdd": 24.452199753701514
+          },
+          "MSFT": {
+            "fly": 11.010943891055422,
+            "buyhold": 11.768914412621074,
+            "excess": -0.7579705215656514,
+            "sharpe": 1.4470926743054089,
+            "trades": 20,
+            "maxdd": 8.116653337988089,
+            "bh_maxdd": 8.768188208483057
+          }
+        }
+      },
+      "test": {
+        "fly": 301.98507858431907,
+        "buyhold": 238.46813125385054,
+        "excess": 63.516947330468525,
+        "sharpe": 0.9324297802783587,
+        "maxdd": 54.24473185212987,
+        "bh_maxdd": 59.03859852982908,
+        "per_ticker": {
+          "TSLA": {
+            "fly": 79.05328795984,
+            "buyhold": 73.20581958523695,
+            "excess": 5.847468374603054,
+            "sharpe": 0.586445673923262,
+            "trades": 273,
+            "maxdd": 72.1489441513198,
+            "bh_maxdd": 73.63221744219076
+          },
+          "NVDA": {
+            "fly": 765.0840519165322,
+            "buyhold": 591.3948705514014,
+            "excess": 173.68918136513082,
+            "sharpe": 1.5245282279572858,
+            "trades": 210,
+            "maxdd": 55.00446920434131,
+            "bh_maxdd": 66.33509934793534
+          },
+          "MSFT": {
+            "fly": 61.81789587658516,
+            "buyhold": 50.80370362491327,
+            "excess": 11.014192251671894,
+            "sharpe": 0.6863154389545283,
+            "trades": 227,
+            "maxdd": 35.58078220072849,
+            "bh_maxdd": 37.148478799361136
+          }
+        }
+      },
+      "guard_failed": false,
+      "seed": 1,
+      "train_seconds": 593.3,
+      "eval_seconds": 18.5,
+      "command": [
+        "C:\\Users\\aziz dhouib\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+        "C:\\Users\\aziz dhouib\\.gemini\\antigravity-ide\\scratch\\fly-trader\\train.py",
+        "--tickers",
+        "TSLA,NVDA,MSFT",
+        "--plan",
+        "cycle_b",
+        "--episodes",
+        "100",
+        "--eval-every",
+        "10",
+        "--reward-mode",
+        "excess",
+        "--mask-preset",
+        "honest",
+        "--select-by",
+        "val_excess",
+        "--indicator-norm",
+        "per_feature",
+        "--val-seeds",
+        "2",
+        "--lr-decay",
+        "0.99",
+        "--n-step",
+        "5",
+        "--seed",
+        "1",
+        "--out",
+        "reports\\seed_sweep\\single_seed1.pt",
+        "--target-entropy",
+        "0.5"
+      ]
+    },
+    {
+      "validation": {
+        "fly": 5.666519933834579,
+        "buyhold": 9.2541473019139,
+        "excess": -3.587627368079321,
+        "sharpe": 0.8144057038060408,
+        "maxdd": 17.839915580876816,
+        "bh_maxdd": 20.89408780427873,
+        "per_ticker": {
+          "TSLA": {
+            "fly": -10.687978551638043,
+            "buyhold": -14.586434969801514,
+            "excess": 3.8984564181634713,
+            "sharpe": -0.300854930487287,
+            "trades": 70,
+            "maxdd": 24.141023091636356,
+            "bh_maxdd": 29.46187545065162
+          },
+          "NVDA": {
+            "fly": 18.342962423313068,
+            "buyhold": 30.57996246292214,
+            "excess": -12.237000039609072,
+            "sharpe": 1.3676014636533287,
+            "trades": 52,
+            "maxdd": 20.650863026206096,
+            "bh_maxdd": 24.452199753701514
+          },
+          "MSFT": {
+            "fly": 9.344575929828709,
+            "buyhold": 11.768914412621074,
+            "excess": -2.424338482792365,
+            "sharpe": 1.3764705782520805,
+            "trades": 57,
+            "maxdd": 8.727860624787995,
+            "bh_maxdd": 8.768188208483057
+          }
+        }
+      },
+      "test": {
+        "fly": 327.3970453220537,
+        "buyhold": 238.46813125385054,
+        "excess": 88.92891406820317,
+        "sharpe": 0.912281236562554,
+        "maxdd": 47.42628557307295,
+        "bh_maxdd": 59.03859852982908,
+        "per_ticker": {
+          "TSLA": {
+            "fly": 135.82820648273332,
+            "buyhold": 73.20581958523695,
+            "excess": 62.62238689749637,
+            "sharpe": 0.7528654261641311,
+            "trades": 488,
+            "maxdd": 58.539633595024924,
+            "bh_maxdd": 73.63221744219076
+          },
+          "NVDA": {
+            "fly": 825.7398161805179,
+            "buyhold": 591.3948705514014,
+            "excess": 234.34494562911652,
+            "sharpe": 1.6349681786189598,
+            "trades": 465,
+            "maxdd": 44.36704279934435,
+            "bh_maxdd": 66.33509934793534
+          },
+          "MSFT": {
+            "fly": 20.62311330290996,
+            "buyhold": 50.80370362491327,
+            "excess": -30.180590322003308,
+            "sharpe": 0.3490101049045712,
+            "trades": 345,
+            "maxdd": 39.37218032484957,
+            "bh_maxdd": 37.148478799361136
+          }
+        }
+      },
+      "guard_failed": false,
+      "seed": 2,
+      "train_seconds": 592.6,
+      "eval_seconds": 18.2,
+      "command": [
+        "C:\\Users\\aziz dhouib\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+        "C:\\Users\\aziz dhouib\\.gemini\\antigravity-ide\\scratch\\fly-trader\\train.py",
+        "--tickers",
+        "TSLA,NVDA,MSFT",
+        "--plan",
+        "cycle_b",
+        "--episodes",
+        "100",
+        "--eval-every",
+        "10",
+        "--reward-mode",
+        "excess",
+        "--mask-preset",
+        "honest",
+        "--select-by",
+        "val_excess",
+        "--indicator-norm",
+        "per_feature",
+        "--val-seeds",
+        "2",
+        "--lr-decay",
+        "0.99",
+        "--n-step",
+        "5",
+        "--seed",
+        "2",
+        "--out",
+        "reports\\seed_sweep\\single_seed2.pt",
+        "--target-entropy",
+        "0.5"
+      ]
+    }
+  ],
+  "elapsed_seconds": 1780.5
+}

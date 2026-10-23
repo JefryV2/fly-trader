@@ -42,13 +42,15 @@ The pipeline:
   implementation.
 - `scripts/data_manifest.py`: writes SHA‑256/date‑coverage metadata for the
   locally cached CSVs, so a clean clone can identify the exact data snapshot.
-- `scripts/seed_sweep.py`: trains the exact portfolio recipe across independent
-  seeds and reports mean, sd, and a t‑based 95 % seed interval. The shipped
-  portfolio recipe is n=10, **+290.2 pp** mean test excess,
-  **[+214.0, +366.4] pp**, 10/10 positive.
+- `scripts/seed_sweep.py`: trains the exact recipe across independent seeds and
+  reports mean, sd, and a t‑based 95 % seed interval. The portfolio recipe is
+  n=10, **+290.2 pp** mean test excess, **[+214.0, +366.4] pp**, 10/10 positive.
+  The single-asset recipe is n=3, **+44.4 pp**, but the interval is
+  **[−96.0, +184.8] pp** and only 2/3 seeds beat buy & hold.
 - `scripts/eval_seed_ci.py`: reports evaluation-path noise for one checkpoint.
-  The single-asset headline is **238.6 % vs 238.5 %** over 10 sampled paths,
-  excess **+0.15 pp** with a 95 % interval of **[−2.28, +2.58] pp** — flat.
+  The deployed single-asset checkpoint is **238.6 % vs 238.5 %** over 10 sampled
+  paths, excess **+0.15 pp** with a 95 % interval of **[−2.28, +2.58] pp** — flat.
+  This is policy-sampling noise, not retraining noise.
 - `scripts/cost_stress.py`: reruns the deployed portfolio checkpoint at
   0/10/25/50/100 bps. The cycle and 2022 edges survive 100 bps; the 2024 arm is
   negative at every cost.
@@ -384,14 +386,26 @@ rebalanced portfolio):
 | trained fly + regime gate | 249.7 | 44.1 | 0.79 |
 | pure `trend200` rule | **255.8** | **43.6** | **0.80** |
 
-- The retrained fly **edges buy & hold by +2.6 pp greedy**, but a 10‑path
+- The shipped checkpoint **edges buy & hold by +2.6 pp greedy**, but a 10‑path
   evaluation rerun is flat: mean **238.6 %** vs **238.5 %**, excess
   **+0.15 pp** with a 95 % evaluation interval of **[−2.28, +2.58] pp**
   (`scripts/eval_seed_ci.py`, `reports/single_eval_ci.json`). It shaves only
   0.3 pp off drawdown. The gain is concentrated in NVDA (+5.8 pp); TSLA is
-  exactly buy & hold (one trade), while MSFT adds +2.0 pp. This is a narrow
-  result and the evaluation interval straddles zero. It is still **one training
-  seed**: the 10 paths measure policy sampling noise, not retraining noise.
+  exactly buy & hold (one trade), while MSFT adds +2.0 pp.
+- Retraining the same 100‑episode recipe on seeds 0/1/2 gives test returns of
+  **219.3 / 302.0 / 327.4 %** against **238.5 %** buy & hold. Mean excess is
+  **+44.4 pp**, but the seed sd is **56.5 pp** and the 95 % training‑seed interval
+  is **[−96.0, +184.8] pp**; only **2/3** seeds beat buy & hold
+  (`scripts/seed_sweep.py`, `reports/single_train_seed_sweep.json`). The deployed
+  checkpoint is the *weak* seed, and the retraining interval easily includes
+  zero. The single-asset edge is therefore **not established**. Reproduce with:
+
+  ```bash
+  python scripts/seed_sweep.py --mode single --seeds 0,1,2 \
+      --tickers TSLA,NVDA,MSFT --plan cycle_b --episodes 100 \
+      --target-entropy 0.5 --select-by val_excess
+  ```
+
 - The **regime gate** cuts max drawdown to 44.1% and raises return to 249.7%,
   but Sharpe (0.79) is lower than the ungated policy (0.83); it is a
   risk‑reduction overlay, not a free win.
@@ -399,10 +413,12 @@ rebalanced portfolio):
   data there is no evidence that the learned policy's extra machinery adds value
   beyond regime timing — consistent with the conditional‑edge result above.
 
-**Verdict.** The retrained policy is essentially a buy & hold tracker with a small
-NVDA/MSFT tilt; the honest result is "not worse than buy & hold," not a large
-edge. The simple trend overlay remains a stronger, cheaper risk‑adjusted
-alternative and is one environment variable away (`FLYBRAIN_REGIME_GATE=true`).
+**Verdict.** The deployed policy is essentially a buy & hold tracker with a small
+NVDA/MSFT tilt; the honest result is "not worse than buy & hold," not a reliable
+edge. The 3‑seed retrain interval is wide and includes zero, so no single-asset
+edge claim survives. The simple trend overlay remains a stronger, cheaper
+risk‑adjusted alternative and is one environment variable away
+(`FLYBRAIN_REGIME_GATE=true`).
 
 ### Learning core: what was broken, and what "more training" now does (2026‑10)
 
@@ -1591,11 +1607,13 @@ guard-rejected seeds explicitly for this reason.
 - The portfolio headline now has a **10-seed interval** (`scripts/seed_sweep.py`):
   +290.2 pp mean test excess, 95 % seed interval [+214.0, +366.4] pp, 10/10 seeds
   positive.
-- The single-asset headline has a **10-path evaluation interval**
-  (`scripts/eval_seed_ci.py`): +0.15 pp excess, 95 % interval [−2.28, +2.58] pp,
-  i.e. flat. This is still **one training seed**; a full training-seed sweep
-  needs ~2 hours per 100-episode run. `scripts/seed_sweep.py --mode single`
-  supports that run when the compute is available.
+- The single-asset recipe has both intervals now. The **10-path evaluation
+  interval** for the deployed checkpoint is +0.15 pp excess, [−2.28, +2.58] pp
+  (`scripts/eval_seed_ci.py`). The **3-seed training interval** is +44.4 pp mean
+  excess, **[−96.0, +184.8] pp**, with only 2/3 seeds positive
+  (`scripts/seed_sweep.py --mode single`). The training interval is the relevant
+  one for a recipe claim, and it includes zero. Observed cost was ~10 minutes per
+  100-episode seed on this machine, not the earlier ~2 h estimate.
 - Costs are a flat 10 bps per side in the headline; `scripts/cost_stress.py`
   reruns the deployed portfolio checkpoint out to 100 bps. Slippage, borrow,
   spread widening and market impact are still not explicitly modelled;
@@ -1629,7 +1647,7 @@ guard-rejected seeds explicitly for this reason.
 | P2 | DONE - offline trainers select on validation, and `/promote` gates the dashboard sidecar on validation |
 | P2 | DONE - `scripts/data_manifest.py` writes SHA-256/coverage manifest |
 | P2 | ✅ `scripts/seed_sweep.py` reports multi-seed confidence intervals (portfolio recipe: n=10, +290.2 pp mean, [214.0, 366.4] pp) |
-| P2 | ✅ `scripts/eval_seed_ci.py` reports the single-asset evaluation-path interval (+0.15 pp, [−2.28, +2.58] pp, n=10). A **training-seed** sweep for the 100-episode single-asset recipe is still open (~2 h/seed). |
+| P2 | ✅ Single-asset evaluation-path interval (+0.15 pp, [−2.28, +2.58] pp, n=10) and **3-seed training interval** (+44.4 pp, [−96.0, +184.8] pp, 2/3 positive). The training interval includes zero; no single-asset edge claim survives. |
 | P2 | ✅ `scripts/cost_stress.py` reruns the portfolio checkpoint at 0/10/25/50/100 bps: cycle excess +353 → +279 pp, 2022 +15 → +11 pp, 2024 −6 → −12 pp. Slippage/impact remain unmodelled. |
 | P2 | DONE - dead best-score checkpoint code removed; `flywire_data/` duplication and legacy scripts remain |
 
