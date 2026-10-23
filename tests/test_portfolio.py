@@ -2,11 +2,17 @@
 import numpy as np
 import pytest
 
+from config import DATA_DIR
 from portfolio_env import (DESIRES, PortfolioEnv, buy_hold_weights,
                            momentum_weights, run_buy_and_hold,
                            run_static_weights, trend200_weights)
 
 TICKERS = ["AAPL", "TSLA", "MSFT"]
+
+pytestmark = pytest.mark.skipif(
+    not all((DATA_DIR / f"{ticker}_daily.csv").exists() for ticker in TICKERS),
+    reason="local OHLCV data missing; run: python data_fetch.py --from-manifest data_manifest.json",
+)
 WINDOW = {"start_date": "2022-01-01", "end_date": "2022-12-31"}
 
 

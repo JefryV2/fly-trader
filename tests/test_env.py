@@ -10,6 +10,11 @@ from env import FlyTradeEnv, fit_indicator_stats
 
 AAPL = DATA_DIR / "AAPL_daily.csv"
 
+pytestmark = pytest.mark.skipif(
+    not AAPL.exists(),
+    reason="local OHLCV data missing; run: python data_fetch.py --from-manifest data_manifest.json",
+)
+
 
 def test_observation_dimension():
     env = FlyTradeEnv(AAPL, window_size=30)

@@ -2,8 +2,14 @@
 import numpy as np
 import pytest
 
-from config import MASK_PRESETS
+from config import DATA_DIR, MASK_PRESETS
 from strategy import apply_action_mask, apply_preset, performance_metrics, sample_action
+
+AAPL = DATA_DIR / "AAPL_daily.csv"
+requires_aapl = pytest.mark.skipif(
+    not AAPL.exists(),
+    reason="local OHLCV data missing; run: python data_fetch.py --from-manifest data_manifest.json",
+)
 
 
 def test_mask_zeroes_invalid_sells():
@@ -89,8 +95,8 @@ def test_baseline_mean_revert_fades_the_window():
     assert p[6] == 1.0
 
 
+@requires_aapl
 def test_compare_on_env_runs_all_baselines():
-    from config import DATA_DIR
     from env import FlyTradeEnv
     from strategy import compare_on_env
 
@@ -107,9 +113,9 @@ def test_compare_on_env_runs_all_baselines():
         assert m["steps"] > 0
 
 
+@requires_aapl
 def test_compare_on_env_buy_hold_matches_price_ratio():
     """buy&hold's return should closely track the raw close-price ratio."""
-    from config import DATA_DIR
     from env import FlyTradeEnv, _load_ohlcv
     from strategy import compare_on_env
 

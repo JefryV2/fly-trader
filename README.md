@@ -199,24 +199,29 @@ The dashboard writes runtime state to
 `web-app/checkpoints/simulation_history.json`; that file is ignored.
 
 ## Quick‑Start
-1. **Run the tests**
+1. **Bootstrap the OHLCV snapshot** (required for the full test suite, training and the dashboard; existing files are skipped):
+   ```bash
+   python data_fetch.py --from-manifest data_manifest.json
+   ```
+2. **Run the tests**. Data-dependent modules skip cleanly until step 1 is complete:
+
    ```bash
    python -m pytest tests -q
    ```
-2. **Train** (time‑split: train = everything before `2023‑07`, val
+3. **Train** (time‑split: train = everything before `2023‑07`, val
    `2023‑07 → 2023‑12`, test `2024`), selecting the best checkpoint by
    validation excess return (`--select-by val_excess`, the default):
    ```bash
    python train.py --ticker AAPL
    python train.py --all-tickers --episodes 40
    ```
-3. **Evaluate honestly (out‑of‑sample)** against baselines. The default
+4. **Evaluate honestly (out‑of‑sample)** against baselines. The default
    checkpoint is the deployed `fly_brain.pt`; the old `best` alias is retired:
    ```bash
    python scripts/backtest.py --ticker AAPL --split test
    python scripts/backtest.py --all-tickers --split test --repair
    ```
-4. **Run the live demo** (FastAPI + web UI):
+5. **Run the live demo** (FastAPI + web UI):
    ```bash
    python -m uvicorn web-app.server:app --port 8000
    ```

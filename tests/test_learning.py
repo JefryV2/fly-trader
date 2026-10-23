@@ -18,6 +18,11 @@ from trainer import train_episode, RewardNormalizer
 
 AAPL = DATA_DIR / "AAPL_daily.csv"
 
+pytestmark = pytest.mark.skipif(
+    not AAPL.exists(),
+    reason="local OHLCV data missing; run: python data_fetch.py --from-manifest data_manifest.json",
+)
+
 
 @pytest.fixture(scope="module")
 def agent():
