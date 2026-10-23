@@ -1,7 +1,7 @@
 """Tests for the multi-seed confidence-interval reporting."""
 import numpy as np
 
-from scripts.seed_sweep import _mean_ci, summarize
+from scripts.seed_sweep import _flatten_single_eval, _mean_ci, summarize
 
 
 def test_mean_ci_uses_t_interval_for_small_samples():
@@ -49,3 +49,18 @@ def test_summarize_reports_distribution_not_best_seed():
     assert s["test_buyhold"]["sd"] == 0.0
     assert np.isclose(s["test_fly"]["sd"], 10.0)
     assert s["guard_failed_seeds"] == 1
+
+
+def test_single_eval_shape_matches_portfolio_eval_shape():
+    out = _flatten_single_eval({
+        "mean_fly": 12.0, "mean_buyhold": 10.0, "mean_excess": 2.0,
+        "mean_sharpe": 1.1, "mean_maxdd": 4.0, "mean_bh_maxdd": 5.0,
+        "per_ticker": {"X": {}},
+    })
+    assert out["fly"] == 12.0
+    assert out["buyhold"] == 10.0
+    assert out["excess"] == 2.0
+    assert out["sharpe"] == 1.1
+    assert out["maxdd"] == 4.0
+    assert out["bh_maxdd"] == 5.0
+    assert out["per_ticker"] == {"X": {}}

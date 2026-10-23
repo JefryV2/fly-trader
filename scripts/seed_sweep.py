@@ -201,6 +201,19 @@ def _eval_portfolio(args, tickers: list[str], holdout: list[str],
             "guard_failed": bool(meta.get("guard_failed", False))}
 
 
+def _flatten_single_eval(result: dict) -> dict:
+    """``train.evaluate_split`` returns mean_* keys; the sweep uses one shape."""
+    return {
+        "fly": result["mean_fly"],
+        "buyhold": result["mean_buyhold"],
+        "excess": result["mean_excess"],
+        "sharpe": result["mean_sharpe"],
+        "maxdd": result["mean_maxdd"],
+        "bh_maxdd": result["mean_bh_maxdd"],
+        "per_ticker": result.get("per_ticker", {}),
+    }
+
+
 def _eval_single(args, tickers: list[str], holdout: list[str],
                  ckpt: Path) -> dict:
     import torch
@@ -234,7 +247,8 @@ def _eval_single(args, tickers: list[str], holdout: list[str],
                              indicator_stats=scalers)
     val = tr.evaluate_split(agent, tickers, "val", ns, deterministic=False,
                             n_seeds=args.val_seeds, indicator_stats=scalers)
-    return {"validation": val, "test": test,
+    return {"validation": _flatten_single_eval(val),
+            "test": _flatten_single_eval(test),
             "guard_failed": bool(meta.get("guard_failed", False))}
 
 
