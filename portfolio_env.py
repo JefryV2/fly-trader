@@ -68,14 +68,18 @@ class PortfolioEnv:
                  use_portfolio_obs: bool = True, rebalance_every: int = 1,
                  alloc_topk: int = None, alloc_gate: str = None,
                  alloc_min_k: int = 0, alloc_max_k: int = None,
-                 action_mask: bool = True):
+                 action_mask: bool = True, indicator_stats: dict = None):
         self.tickers = list(tickers)
         self.n_assets = len(self.tickers)
+        stats_by_ticker = {
+            str(k).strip().upper(): v for k, v in (indicator_stats or {}).items()
+        }
         self.envs = [
             FlyTradeEnv(DATA_DIR / f"{t}_daily.csv", window_size=window_size,
                         start_date=start_date, end_date=end_date,
                         indicator_norm=indicator_norm, reward_mode="logret",
-                        use_xsection=use_xsection)
+                        use_xsection=use_xsection,
+                        indicator_stats=stats_by_ticker.get(str(t).strip().upper()))
             for t in self.tickers
         ]
         self.window_size = window_size
@@ -272,7 +276,7 @@ class PortfolioEnv:
         targets = self.weights_from_actions(actions)
         return self._advance(targets)
 
-    def _advance(self, targets: np.ndarray):
+    def _advance(self, targets: np.ndarray, drift_only: bool = False):
         bar = self._bar(self.step_i)
         next_step = min(self.step_i + self.rebalance_every, self.n_steps)
         next_bar = self._bar(next_step)
@@ -283,22 +287,41 @@ class PortfolioEnv:
             p0, p1 = self._price(a, bar), self._price(a, next_bar)
             rets[a] = (p1 / (p0 + 1e-12) - 1.0) if p0 > 0 else 0.0
 
+        # ``drift_only`` is used by true buy & hold: the target is the weight
+        # vector that price moves already produced, so it is not a trade. The
+        # absence of turnover and cost is the distinction from a monthly
+        # rebalance to constant weights.
         dw = targets - self.weights
+        if drift_only:
+            dw = np.zeros_like(dw)
         turnover = np.abs(dw)
         cost = turnover * self.transaction_cost
         rewards = targets * rets - cost - self.turnover_penalty * turnover
 
-        self.weights = targets
-        self.cash = float(max(0.0, 1.0 - targets.sum()))
+        cash_target = float(max(0.0, 1.0 - targets.sum()))
         for a in range(self.n_assets):
             if abs(dw[a]) > 1e-6:
-                if self.weights[a] > 1e-6 and (self.entry[a] is None
-                                               or self.entry[a] <= 0):
+                if targets[a] > 1e-6 and (self.entry[a] is None
+                                          or self.entry[a] <= 0):
                     self.entry[a] = self._price(a, next_bar)
                 self.last_trade_step[a] = self.step_i
                 self.n_trades += 1
-            if self.weights[a] <= 1e-6:
+            if targets[a] <= 1e-6:
                 self.entry[a] = None
+
+        # Carry the *actual* post-return weights into the next decision. The next
+        # target is compared against this drifted book, otherwise rebalancing
+        # costs and turnover are understated for every strategy (including the
+        # learned policy).
+        gross = targets * (1.0 + rets)
+        total = float(gross.sum() + cash_target)
+        if total > 1e-12:
+            self.weights = gross / total
+            self.cash = cash_target / total
+        else:
+            self.weights = targets.copy()
+            self.cash = cash_target
+
         self.turnover_total += float(turnover.sum())
         self.breadth.append(int((self.weights > 1e-6).sum()))
         port_ret = float(targets @ rets - cost.sum())
@@ -314,6 +337,7 @@ class PortfolioEnv:
             "cash": self.cash,
             "turnover": float(turnover.sum()),
             "portfolio_return": port_ret,
+            "asset_returns": rets.copy(),
         }
         return obs, rewards, done, info
 
@@ -350,6 +374,31 @@ def buy_hold_weights(env: PortfolioEnv, i: int = 0) -> np.ndarray:
     return np.full(env.n_assets, 1.0 / env.n_assets)
 
 
+def run_buy_and_hold(env: PortfolioEnv) -> dict:
+    """True equal-weight buy & hold: enter once, then let weights drift.
+
+    ``run_static_weights`` recomputes its weight rule every decision, which is
+    useful for trend/momentum baselines but makes ``buy_hold_weights`` a
+    *monthly-rebalanced* equal-weight portfolio, not buy & hold. This helper
+    passes the current drifted weights back to the env after the first entry,
+    so turnover is exactly the initial entry and the comparison matches the
+    label on the chart.
+    """
+    env.reset()
+    equity = [1.0]
+    _, _, done, _ = env._advance(buy_hold_weights(env))
+    equity.append(float(env.value))
+    while not done:
+        # ``_advance`` already left the actual price-drifted weights in the env.
+        # Passing them back with ``drift_only=True`` holds the book without
+        # charging a rebalance.
+        _, _, done, _ = env._advance(env.weights.copy(), drift_only=True)
+        equity.append(float(env.value))
+    metrics = env.metrics()
+    metrics["equity"] = equity
+    return metrics
+
+
 def trend200_weights(env: PortfolioEnv, i: int) -> np.ndarray:
     """Equal-weight the assets trading above their 200-day SMA, else cash."""
     above = [a for a, e in enumerate(env.envs)
@@ -383,6 +432,11 @@ def run_static_weights(env: PortfolioEnv, weight_fn, rebalance_every: int = 1) -
     while not done:
         if d % max(1, rebalance_every) == 0:
             w = weight_fn(env, env.step_i)
-        _, _, done, _ = env._advance(w)
+            _, _, done, _ = env._advance(w)
+        else:
+            # Between rule decisions the book is simply held: the env's weights
+            # have already drifted with prices, so this is not a trade back to
+            # the last target.
+            _, _, done, _ = env._advance(env.weights.copy(), drift_only=True)
         d += 1
     return env.metrics()

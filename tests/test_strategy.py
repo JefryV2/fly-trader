@@ -62,6 +62,33 @@ def test_baseline_buy_hold_buys_then_holds():
     assert p[0] == 1.0
 
 
+def test_baseline_momentum_uses_price_trend():
+    from strategy import baseline_probs
+    from config import OBS_DIM
+    obs = np.ones(OBS_DIM)
+    obs[3] = 1.0
+    obs[148] = 1.10
+    p = baseline_probs("momentum", obs, shares=0.0, cash=1e5, prev_action=0)
+    assert p[3] == 1.0
+    p = baseline_probs("momentum", obs, shares=1.0, cash=0.0, prev_action=3)
+    assert p[0] == 1.0
+
+
+def test_baseline_mean_revert_fades_the_window():
+    from strategy import baseline_probs
+    from config import OBS_DIM
+    obs = np.ones(OBS_DIM)
+    for i in range(30):
+        obs[3 + 5 * i] = 1.0 - 0.01 * i
+    p = baseline_probs("mean_revert", obs, shares=0.0, cash=1e5, prev_action=0)
+    assert p[3] == 1.0
+
+    for i in range(30):
+        obs[3 + 5 * i] = 1.0 + 0.01 * i
+    p = baseline_probs("mean-revert", obs, shares=1.0, cash=0.0, prev_action=0)
+    assert p[6] == 1.0
+
+
 def test_compare_on_env_runs_all_baselines():
     from config import DATA_DIR
     from env import FlyTradeEnv

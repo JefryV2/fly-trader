@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from config import CHECKPOINT_DIR, DATA_DIR, SPLITS, TICKERS  # noqa: E402
-from env import FlyTradeEnv  # noqa: E402
+from env import FlyTradeEnv, fit_indicator_stats  # noqa: E402
 from fly_brain import FlyBrainAgent  # noqa: E402
 from strategy import compare_on_env  # noqa: E402
 
@@ -82,11 +82,21 @@ def evaluate_ticker(agent, ticker, split, args):
         print(f"  !! {data_path.name} missing, skipping")
         return None
 
+    # Fit preprocessing on train only. Recomputing it on the test slice would
+    # leak that window's mean/variance into its own observations.
+    train_start, train_end = SPLITS["train"]
+    try:
+        train_stats = fit_indicator_stats(data_path, train_start, train_end)
+    except (AssertionError, ValueError) as exc:
+        print(f"  !! {ticker}: cannot fit train-only scaler ({exc}), skipping")
+        return None
+
     def build_env():
         return FlyTradeEnv(
             data_path, window_size=30,
             enable_sl_tp=args.sl_tp,
             start_date=start, end_date=end,
+            indicator_stats=train_stats,
         )
 
     env_probe = build_env()

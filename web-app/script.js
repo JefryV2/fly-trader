@@ -143,18 +143,9 @@ async function apiStep(manualAction = -1) {
   const learning = $('learning-toggle')?.checked ?? true;
   const explore = $('explore-toggle')?.checked ?? false;
 
-  let action = manualAction;
-  if (manualAction === -1) {
-    if (policy === 'brain') {
-      action = -1; // Tell server Fly Brain to deliberate
-    } else if (policy === 'momentum') {
-      action = Math.random() < 0.2 ? 0 : lastAction || 1;
-    } else if (policy === 'mean-revert') {
-      action = lastAction === 1 ? 2 : lastAction === 2 ? 1 : 1;
-    } else {
-      action = Math.floor(Math.random() * 3);
-    }
-  }
+  // The server resolves the selected policy. Manual buttons still pass an
+  // explicit action; otherwise -1 means "let the selected policy decide".
+  const action = manualAction;
 
   try {
     const r = await fetch(`${API}/step`, {

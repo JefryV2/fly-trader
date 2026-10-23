@@ -157,6 +157,25 @@ def baseline_probs(name: str, obs, *, shares: float, cash: float, prev_action: i
             p[6] = 1.0  # Sell 100%
         else:
             p[0] = 1.0
+    elif name in ("mean_revert", "mean-revert"):
+        # Fade the 30-day window: buy when the last close is materially below
+        # its own mean, sell when it is materially above. This is a real
+        # baseline, unlike the dashboard's old client-side "alternate buys"
+        # approximation.
+        if len(obs) < 150:
+            p[0] = 1.0
+        else:
+            closes = np.asarray([float(obs[3 + 5 * i]) for i in range(30)])
+            mean = float(closes.mean())
+            std = float(closes.std())
+            last = float(closes[-1])
+            band = max(0.5 * std, 1e-6)
+            if last < mean - band and shares <= 1e-6 and cash > 0:
+                p[3] = 1.0
+            elif last > mean + band and shares > 0:
+                p[6] = 1.0
+            else:
+                p[0] = 1.0
     elif name == "trend200":
         # Pure regime rule: long above the 200-day trend, flat below it. Reads the
         # long-horizon regime block the env exposes (index -4 = close/SMA200-1).
@@ -200,9 +219,10 @@ def vol_target_prob_fn(inner, *, target_vol: float = 0.30, band: float = 0.10):
     the agent holds.
 
     This is a *pre-specified* risk overlay, not a learned behaviour. Its level is
-    selected on the validation split (0.30) and it improves the learned policy on
-    every held-out window (2022 bear, 2024 bull, the full cycle and the AAPL
-    demo). Returns ``inner``'s distribution unchanged when disabled (<= 0).
+    selected on the validation split (0.30). It improves the 2022 bear and 2024
+    bull windows but costs full-cycle return, so it is a regime-dependent
+    tradeoff rather than a universal improvement. Returns ``inner``'s
+    distribution unchanged when disabled (<= 0).
     """
     def prob_fn(obs, prev_action, shares, cash):
         p = np.asarray(inner(obs, prev_action, shares, cash), dtype=np.float64)

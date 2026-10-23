@@ -26,11 +26,27 @@ import argparse
 
 import numpy as np
 
-from config import SPLIT_PLANS
-from portfolio_env import (PortfolioEnv, buy_hold_weights, momentum_weights,
+from config import DATA_DIR, SPLIT_PLANS
+from env import fit_indicator_stats
+from portfolio_env import (PortfolioEnv, momentum_weights, run_buy_and_hold,
                            run_static_weights, trend200_weights)
 
 DEFAULT_TICKERS = "NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN"
+
+
+def train_scalers(tickers, args) -> dict:
+    """Fit preprocessing on the plan's train split, never on val/test."""
+    start, end = SPLIT_PLANS[args.plan]["train"]
+    scalers = {}
+    for t in tickers:
+        try:
+            scalers[t] = fit_indicator_stats(DATA_DIR / f"{t}_daily.csv", start, end)
+        except (AssertionError, FileNotFoundError, ValueError) as exc:
+            raise SystemExit(
+                f"Cannot fit a train-only indicator scaler for {t}: {exc}. "
+                "Drop the ticker or use a plan with enough train history."
+            )
+    return scalers
 
 
 def make_env(args) -> PortfolioEnv:
@@ -49,12 +65,14 @@ def make_env(args) -> PortfolioEnv:
         alloc_gate=getattr(args, "alloc_gate", None),
         alloc_min_k=getattr(args, "alloc_min_k", 0),
         alloc_max_k=getattr(args, "alloc_max_k", None),
+        indicator_stats=train_scalers(tickers, args),
     )
 
 
 def run_fly(env: PortfolioEnv, args) -> dict:
     from fly_brain import FlyBrainAgent
-    agent = FlyBrainAgent(obs_dim=env.obs_dim, use_connectome=True,
+    agent = FlyBrainAgent(obs_dim=env.obs_dim,
+                          use_connectome=getattr(args, "use_connectome", True),
                           use_xsection=args.use_xsection,
                           use_full_readout=args.use_full_readout)
     import torch
@@ -77,6 +95,9 @@ def main():
     p.add_argument("--plan", default="cycle_b", choices=list(SPLIT_PLANS))
     p.add_argument("--split", default="test", choices=["train", "val", "test"])
     p.add_argument("--use-xsection", dest="use_xsection", action="store_true")
+    p.add_argument("--no-connectome", dest="use_connectome", action="store_false",
+                   default=True,
+                   help="must match training for random-weight control checkpoints")
     p.add_argument("--full-readout", dest="use_full_readout", action="store_true",
                    help="checkpoint was trained with the whole-brain read-out")
     p.add_argument("--cost", type=float, default=0.001)
@@ -118,7 +139,7 @@ def main():
     # When the env itself rebalances on a horizon, every baseline recomputes its
     # rule at each decision (i.e. at each horizon), not every N decisions.
     cad = (lambda k: k) if args.rebalance_every == 1 else (lambda k: 1)
-    results["buy&hold"] = run_static_weights(env, lambda e, i: buy_hold_weights(e), cad(1))
+    results["buy&hold"] = run_buy_and_hold(env)
     results["trend200-daily"] = run_static_weights(env, trend200_weights, cad(1))
     results["trend200-weekly"] = run_static_weights(env, trend200_weights, cad(5))
     results["mom%d-top%d-m" % (args.momentum_lookback, args.momentum_topk)] = run_static_weights(

@@ -1,0 +1,50 @@
+{
+  "root_cache": {
+    "nnz": 59445,
+    "diagonal": 1024,
+    "off_diagonal": 58421,
+    "support_matches_pinned_off_diagonal": true,
+    "value_corr_same_orientation": 0.06545934564031977,
+    "value_corr_vs_transpose": 0.8952500441594136,
+    "common_same": 30948,
+    "common_transpose": 58421
+  },
+  "rebuilt_pinned": {
+    "nnz": 58421,
+    "provenance": {
+      "source_files": {
+        "2025_Completeness_783.csv": "52b0ac6094cd32c546f8d4c341e094376f48f4e791f8db9b166de5dff8199ea4",
+        "2025_Connectivity_783.parquet": "efeb23fb99098e9c390f6869969b2a121a2ee92c833cfc45ecb2c1d8e1af0347"
+      },
+      "target_neurons": 1024,
+      "selection_mode": "pinned",
+      "selection_rows_sha256": "8493bb98e5de96440c99452f62d3bdb2dbf775db4346cc7fef8253a5c5b2d600",
+      "synapses_within_selection": 58421,
+      "nnz": 58421,
+      "clip": 0.45,
+      "normalize": "degree",
+      "reciprocal_scale": 0.0,
+      "mapping": "row_index_of_completeness_csv -> model_index",
+      "cell_type_verified": false,
+      "built_at": "2026-10-23T12:17:04"
+    }
+  },
+  "web_app_cache": {
+    "nnz": 1130,
+    "provenance": {
+      "source_files": {
+        "2025_Completeness_783.csv": "52b0ac6094cd32c546f8d4c341e094376f48f4e791f8db9b166de5dff8199ea4",
+        "2025_Connectivity_783.parquet": "efeb23fb99098e9c390f6869969b2a121a2ee92c833cfc45ecb2c1d8e1af0347"
+      },
+      "target_neurons": 1024,
+      "synapses_within_selection": 1130,
+      "nnz": 1130,
+      "clip": 0.45,
+      "normalize": "degree",
+      "reciprocal_scale": 0.0,
+      "mapping": "row_index_of_completeness_csv -> model_index",
+      "cell_type_verified": false
+    }
+  },
+  "conclusion": "Pinned support is real FlyWire; deployed cache values are a legacy transform, not a byte-reproducible build. web-app cache was file-order and is no longer selected by default."
+}

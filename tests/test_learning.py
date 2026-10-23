@@ -9,9 +9,10 @@ import numpy as np
 import pytest
 import torch
 
-from config import DATA_DIR, OBS_DIM
+from config import DATA_DIR, OBS_DIM, ROOT
 from env import FlyTradeEnv
 from fly_brain import FlyBrainAgent
+import train as tr
 from trainer import train_episode, RewardNormalizer
 
 
@@ -92,15 +93,39 @@ def test_reward_normalizer_persists_across_episodes(agent):
     assert norm1.count > count_after_one
 
 
-def test_set_policy_state_tolerates_shape_drift():
+def test_set_policy_state_tolerates_legacy_shape_drift():
     src = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
     state = src.get_policy_state()
+    # Simulate a legacy checkpoint (no architecture metadata).
+    legacy = dict(state)
+    legacy.pop("meta", None)
+    legacy["model_state"] = dict(state["model_state"])
     # Corrupt one tensor's shape, as an older architecture would.
-    state["model_state"]["feature_encoder.0.weight"] = torch.zeros(3, 3)
+    legacy["model_state"]["feature_encoder.0.weight"] = torch.zeros(3, 3)
     fresh = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
-    fresh.set_policy_state(state)  # must not raise
+    fresh.set_policy_state(legacy)  # must not raise for legacy checkpoints
     # The healthy tensors were still loaded from the source checkpoint.
     assert torch.allclose(fresh.critic[0].weight, src.critic[0].weight, atol=1e-6)
+
+
+def test_new_checkpoint_metadata_fails_loudly_on_mismatch():
+    src = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
+    state = src.get_policy_state()
+    assert state["meta"]["obs_dim"] == OBS_DIM
+    state["model_state"]["feature_encoder.0.weight"] = torch.zeros(3, 3)
+    fresh = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
+    with pytest.raises(ValueError, match="architecture mismatch"):
+        fresh.set_policy_state(state)
+
+
+def test_checkpoint_records_connectome_choice_and_rejects_a_swap():
+    """A random-weight control must not silently load into a FlyWire agent."""
+    control = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=False)
+    state = control.get_policy_state()
+    assert state["meta"]["use_connectome"] is False
+    live = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
+    with pytest.raises(ValueError, match="use_connectome"):
+        live.set_policy_state(state)
 
 
 def test_reward_normalizer_clips_extremes():
@@ -156,3 +181,37 @@ def test_batched_features_match_single_observation():
     assert actions.shape == (obs.shape[0],)
     assert probs.shape == (obs.shape[0], 7)
     assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_evaluate_split_can_return_per_seed_distribution(monkeypatch):
+    """The CI reporter needs each evaluation seed, not only their mean."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(tr, "make_env", lambda *a, **k: object())
+
+    def fake_compare(factory, agent, deterministic=False, seed=0,
+                     include_legacy=False, include_baselines=True):
+        return {
+            "fly_honest": {"total_return_pct": float(seed), "sharpe": 1.0,
+                           "max_drawdown_pct": 2.0, "trades": 1},
+            "buy_hold": {"total_return_pct": 5.0, "max_drawdown_pct": 3.0},
+        }
+
+    monkeypatch.setattr(tr, "compare_on_env", fake_compare)
+    out = tr.evaluate_split(None, ["X"], "test", SimpleNamespace(seed=0),
+                            n_seeds=3, return_per_seed=True)
+    assert [r["fly"] for r in out["per_seed"]] == [0.0, 1009.0, 2018.0]
+    assert [r["excess"] for r in out["per_seed"]] == [-5.0, 1004.0, 2013.0]
+    assert out["mean_fly"] == 1009.0
+    assert "per_seed" not in tr.evaluate_split(
+        None, ["X"], "test", SimpleNamespace(seed=0), n_seeds=1)
+
+@pytest.mark.skipif(
+    not (ROOT / "flywire_weights" / "connectome_weights.pkl").exists(),
+    reason="local FlyWire cache not generated",
+)
+def test_connectome_cache_is_cwd_independent(monkeypatch, tmp_path):
+    """Starting the server from web-app/ must not select a different circuit."""
+    monkeypatch.chdir(tmp_path)
+    agent = FlyBrainAgent(obs_dim=OBS_DIM, use_connectome=True)
+    assert agent.simulator.W.nnz > 10000

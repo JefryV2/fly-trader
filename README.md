@@ -37,13 +37,36 @@ The pipeline:
 - `train.py`: offline online‑AC trainer with a proper time split and
   validation‑based checkpoint selection. Runs end‑to‑end.
 - `scripts/backtest.py`: honest out‑of‑sample evaluation vs buy‑&‑hold,
-  momentum and random baselines, all sharing one masking/selection code path.
+  momentum, trend‑200 and random baselines, all sharing one masking/selection
+  code path; the dashboard chips use the same `strategy.baseline_probs`
+  implementation.
+- `scripts/data_manifest.py`: writes SHA‑256/date‑coverage metadata for the
+  locally cached CSVs, so a clean clone can identify the exact data snapshot.
+- `scripts/seed_sweep.py`: trains the exact portfolio recipe across independent
+  seeds and reports mean, sd, and a t‑based 95 % seed interval. The shipped
+  portfolio recipe is n=10, **+290.2 pp** mean test excess,
+  **[+214.0, +366.4] pp**, 10/10 positive.
+- `scripts/eval_seed_ci.py`: reports evaluation-path noise for one checkpoint.
+  The single-asset headline is **238.6 % vs 238.5 %** over 10 sampled paths,
+  excess **+0.15 pp** with a 95 % interval of **[−2.28, +2.58] pp** — flat.
+- `scripts/cost_stress.py`: reruns the deployed portfolio checkpoint at
+  0/10/25/50/100 bps. The cycle and 2022 edges survive 100 bps; the 2024 arm is
+  negative at every cost.
+- `scripts/wider_universe.py` and `scripts/connectome_ablation.py`: reproducible
+  A/B studies for the 43‑name training universe and the FlyWire circuit. Their
+  JSON artifacts are committed under `reports/`; the results are reported with
+  negatives (the connectome contribution is not statistically significant).
+- `scripts/verified_cache_ab.py`: swaps the legacy cache for the byte‑reproducible
+  pinned rebuild, runs the matched A/B, and restores the deployed cache. The
+  genuine cache does not rescue the connectome claim: paired cycle excess is
+  **+40.2 pp** with a 95 % interval of **[−218.1, +298.5] pp**.
 - `web-app/server.py`: FastAPI backend + Three.js front‑end demo. Boots, steps,
   trains and evaluates. Its **Portfolio** tab serves the cross‑section backtest
   (`/portfolio_eval`) with baselines and equity curves.
-- `/train_batch` trains on the **train split only** and reports **median +
-  held‑out (test)** results; `/eval_episode` is split‑aware and returns a
-  buy‑&‑hold reference.
+- `/train_batch` trains on the **train split only**, reports **median +
+  held‑out (test)** results, and saves a dashboard-only `fly_brain_live.pt`
+  sidecar (never the deployment checkpoint); `/eval_episode` is split‑aware and
+  returns a buy‑&‑hold reference.
 - One shared masking implementation (`strategy.apply_action_mask`) used by the
   API, the trainer and the backtest (previously four copy‑pasted variants).
 - Portfolio mode: a shared policy allocates one budget across N assets + cash on
@@ -60,12 +83,18 @@ The pipeline:
   move, and the reported `best_return_pct` was the **max over stochastic
   in‑sample episodes**. Training now defaults to the train split and reporting
   uses the median + a held‑out number instead of that max.
-- The cached `flywire_weights/connectome_weights.pkl` has **unverified
-  provenance**. Rebuilding from the raw FlyWire files with the correct mapping
-  yields only **1,130** synapses among the selected neurons, whereas the cached
-  matrix has **59,445** non‑zeros — i.e. the cached "connectome" weights are
-  effectively synthetic, not a genuine subset of the FlyWire connectome.
-  Regenerate/audit with `scripts/rebuild_connectome.py`.
+- The cached `flywire_weights/connectome_weights.pkl` has **unverified weight
+  values**. Its 59,445 non‑zeros are exactly the pinned selection's **58,421
+  off‑diagonal FlyWire edges plus 1,024 diagonal self‑connections**, so the
+  support is real. The values do not match a fresh degree‑normalised rebuild
+  (correlation 0.07 same‑orientation, 0.90 against the transpose), so they are
+  a legacy transformation, not a byte‑reproducible build. Audit/regenerate with
+  `scripts/rebuild_connectome.py --selection flywire_weights/connectome_selection_1024.json`;
+  the pinned rebuild reproduces 58,421 real synapses. A second
+  `web-app/flywire_weights/` cache contained a **1,130‑edge file‑order** matrix;
+  default cache paths are now anchored to the repository root, so starting the
+  server from `web-app/` can no longer silently select it. Audit artifact:
+  `reports/connectome_audit.json`.
 - The anatomical partitions (AL/KC/CX/DAN/MBON) are a *structural* split of the
   neuron indices, not a cell‑type‑verified mapping.
 - **`indicator_norm` now defaults to `per_feature`** in the env, `train.py`,
@@ -76,6 +105,14 @@ The pipeline:
   still be loaded. (A `block`‑trained checkpoint that is evaluated with
   `per_feature` produces garbage — this is exactly the mismatch that is now
   impossible by default.)
+- **Indicator scaling is fit on the train split only.** `train.py`,
+  `train_portfolio.py`, `run_portfolio.py`, `scripts/backtest.py`, and the
+  server now pass a `(mean, std)` scaler fitted on the training window into
+  validation/test/live environments. Old scripts that construct
+  `FlyTradeEnv(...)` without `indicator_stats=` retain the previous
+  self-normalising behaviour for checkpoint compatibility, but that path is not
+  walk-forward safe. Existing checkpoints should be retrained before comparing
+  new numbers with the tables in this file.
 - `fly_connectome/` is an unmodified upstream React template, used only for its
   atlas binaries.
 - `flywire_data/` is duplicated inside `web-app/` (~96 MB ×2).
@@ -101,6 +138,14 @@ fly-trader/
 │   scripts/
 │   │   backtest.py            # Honest out‑of‑sample evaluation harness
 │   │   rebuild_connectome.py  # Rebuild connectome weights with auditable provenance
+│   │   data_manifest.py       # SHA‑256 / coverage manifest for the local data
+│   │   seed_sweep.py          # Train a recipe across seeds, report 95 % intervals
+│   │   eval_seed_ci.py        # Evaluation-seed interval for one existing checkpoint
+│   │   cost_stress.py         # 0/10/25/50/100 bps transaction-cost stress test
+│   │   wider_universe.py      # Narrow vs 43‑name portfolio-universe A/B
+│   │   connectome_ablation.py # FlyWire vs random-weight circuit, matched A/B
+│   │   verified_cache_ab.py   # Legacy vs byte-reproducible pinned-cache A/B
+│   reports/                    # JSON artifacts for the studies above
 │   tests/                     # pytest suite (env invariants, masking, metrics)
 │   web-app/                   # FastAPI server + front‑end demo
 │   flywire_data/              # FlyWire v783 raw files (Completeness csv + Connectivity parquet)
@@ -154,6 +199,10 @@ python -m pip install -r requirements.txt
    to 100% is reachable; a one‑hot policy reproduces the discrete 25/50/100
    ladder exactly. This is an execution rule applied *after* the learned action:
    the headline backtest numbers above were measured with the discrete ladder.
+   The dashboard's **Momentum / Mean‑Revert / Random** chips are resolved by
+   the server through `strategy.baseline_probs`, not approximated in the
+   browser; manual trade buttons still override them. Portfolio mode ignores
+   the per‑asset chips because its shared allocator owns the book.
    The oscilloscope plots each region's **p99 peak** membrane potential rather
    than the mean, because the mean sits at the −85 mV clip and hides all
    spiking; the marked threshold is −38.5 mV, the model's own `V > 0.7`.
@@ -175,8 +224,16 @@ The API follows the same rule:
   12 training names (`MSFT,TSLA,AMD,GOOGL,AMZN,KO,COST,HD,V,MA,ORCL,PG`); the
   `heldout` block evaluates the 10 unseen names
   (`NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN`), which are never trained on.
+- `POST /promote` is the only dashboard path that can replace the deployment
+  checkpoint. It evaluates `fly_brain_live.pt` and `fly_brain.pt` on the
+  validation split, and copies the sidecar into deployment only if the candidate
+  beats both the current deployment and buy & hold there. It never evaluates the
+  test split. A rejected candidate leaves both files untouched.
 - `POST /eval_episode {"ticker": ..., "split": "test"}` is split‑aware and
   returns `buy_hold_return_pct` and `excess_vs_buyhold_pct` for context.
+- `GET /health` is a cheap liveness probe; `GET /checkpoint_info` exposes the
+  loaded deployment checkpoint metadata and whether the dashboard‑only live
+  sidecar exists.
 
 > A "3000%" training episode was **not** skill: TSLA/NVDA/MSFT files span
 > 2015‑2025 and the number was each asset's own buy‑and‑hold move, taken as the
@@ -216,9 +273,10 @@ python train.py --all-tickers --select-by val_sharpe            # risk-adjusted 
 python train.py --all-tickers --plan bear2022                   # train pre-2021, test 2022
 ```
 
-### Honest out‑of‑sample results
-Two runs, 80 episodes, `per_feature`, `target_entropy 0.3`, honest mask, no buy‑margin,
-`action_floor=0`, position‑aware observation (394‑dim), checkpoint selected by stochastic
+### Honest out‑of‑sample results (historical 2026‑08 run)
+This table predates the current 398‑dim retrain and is kept as an ablation
+record; use the retrain table above for current numbers. Two runs, 80 episodes, `per_feature`, `target_entropy 0.3`, honest mask, no buy‑margin,
+`action_floor=0`, position‑aware observation (398‑dim), checkpoint selected by stochastic
 **validation** excess with a buy & hold floor. Deterministic greedy policy on the held‑out
 test window:
 
@@ -311,36 +369,40 @@ honest mask, transaction costs included):
 Reproduce the shipped checkpoint (~15 min):
 ```bash
 python train.py --all-tickers --plan cycle_b --indicator-norm per_feature \
-    --target-entropy 0.5 --episodes 100 --select-by val_excess
+    --target-entropy 0.5 --episodes 100 --select-by val_excess \
+    --out web-app/checkpoints/fly_brain.pt
 ```
 
-Equal‑weight portfolio on the held‑out test window:
+Equal‑weight *mean of per‑ticker test episodes* on the held‑out test window
+(TSLA, NVDA, MSFT; one model, equal starting cash per episode, not a
+rebalanced portfolio):
 
 | candidate | return % | max drawdown % | Sharpe |
 |-----------|---------:|---------------:|-------:|
-| buy & hold | 238.5 | 55.8 | 1.09 |
-| **trained fly** (this repo's shipped checkpoint) | **244.7** | 54.5 | **1.11** |
-| trained fly + regime gate | 228.7 | **41.5** | 1.26 |
-| pure `trend200` rule | **255.8** | **38.4** | **1.32** |
+| buy & hold | 238.5 | 59.0 | 0.83 |
+| **trained fly (current retrain)** | **241.1** | **58.8** | **0.83** |
+| trained fly + regime gate | 249.7 | 44.1 | 0.79 |
+| pure `trend200` rule | **255.8** | **43.6** | **0.80** |
 
-- The **trained fly now beats buy & hold on all three metrics**, but narrowly:
-  +6.2 pp greedy, +8.7 pp averaged over 5 stochastic seeds (±11 pp). The gain is
-  concentrated in NVDA; on TSLA/MSFT the fly essentially *tracks* buy & hold at
-  equal drawdown. It is a real, held‑out edge — not a large one.
-- The **regime gate** trades ≈4 pp of return for a much smaller drawdown and a
-  higher Sharpe; it is the better choice if you optimise risk‑adjusted return.
-- The **pure 200‑day trend rule dominates both** on every metric here. On this
+- The retrained fly **edges buy & hold by +2.6 pp greedy**, but a 10‑path
+  evaluation rerun is flat: mean **238.6 %** vs **238.5 %**, excess
+  **+0.15 pp** with a 95 % evaluation interval of **[−2.28, +2.58] pp**
+  (`scripts/eval_seed_ci.py`, `reports/single_eval_ci.json`). It shaves only
+  0.3 pp off drawdown. The gain is concentrated in NVDA (+5.8 pp); TSLA is
+  exactly buy & hold (one trade), while MSFT adds +2.0 pp. This is a narrow
+  result and the evaluation interval straddles zero. It is still **one training
+  seed**: the 10 paths measure policy sampling noise, not retraining noise.
+- The **regime gate** cuts max drawdown to 44.1% and raises return to 249.7%,
+  but Sharpe (0.79) is lower than the ungated policy (0.83); it is a
+  risk‑reduction overlay, not a free win.
+- The **pure 200‑day trend rule still edges both** on every metric here. On this
   data there is no evidence that the learned policy's extra machinery adds value
   beyond regime timing — consistent with the conditional‑edge result above.
 
-**Verdict.** The fly used to lose to buy & hold because of the *objective and the
-data*, not the network: a bull‑only training window contains no de‑risking signal,
-so the `excess` reward correctly converges to "always long" (buy & hold). Training
-on a window that contains a bear (`cycle_b`) and giving the policy the regime
-block lets it learn *some* de‑risking, and the shipped checkpoint now edges the
-benchmark out of sample. The simple trend overlay remains a stronger, cheaper
-risk‑adjusted alternative and is one environment variable away
-(`FLYBRAIN_REGIME_GATE=true`).
+**Verdict.** The retrained policy is essentially a buy & hold tracker with a small
+NVDA/MSFT tilt; the honest result is "not worse than buy & hold," not a large
+edge. The simple trend overlay remains a stronger, cheaper risk‑adjusted
+alternative and is one environment variable away (`FLYBRAIN_REGIME_GATE=true`).
 
 ### Learning core: what was broken, and what "more training" now does (2026‑10)
 
@@ -367,10 +429,12 @@ changed (all in `trainer.py` / `FlyBrainAgent.train_online_step`):
 
 The read‑out shape (`128/64`) was deliberately **kept**, so existing checkpoints
 still load bit‑for‑bit; the `Dropout` layers became `nn.Identity` (identical
-parameter names, no train/eval noise). Checkpoint loading now tolerates
-architecture drift (missing/shape‑changed tensors degrade gracefully instead of
-crashing the server), and `pytest.ini` scopes collection to `tests/` so a plain
-`pytest` works (the repo root has tracked ad‑hoc `test_*.py` scripts).
+parameter names, no train/eval noise). New checkpoints carry architecture
+metadata (`obs_dim`, neuron count, read‑out mode, feature width) and fail loudly
+on a mismatch instead of silently leaving random tensors in place. Legacy
+checkpoints without metadata retain the tolerant loader for compatibility, and
+`pytest.ini` scopes collection to `tests/` so a plain `pytest` works (the repo
+root has tracked ad‑hoc `test_*.py` scripts).
 
 **Honest result: stabilising the learner made it converge to buy & hold.** With
 the update fixed, a 200‑episode `cycle_b` run does not beat the shipped
@@ -397,24 +461,25 @@ The server deploys a selectable strategy. The default is the **learned fly with 
 pre‑specified volatility‑targeting overlay** (`FLYBRAIN_STRATEGY=fly`,
 `FLYBRAIN_VOL_TARGET=0.30`): exposure is sized by inverse realised volatility, so
 the policy de‑risks automatically when volatility spikes. The overlay level was
-**selected on the validation split** (2021H1), never on the test windows, and it
-improves the learned policy on *every* held‑out window — including the 2022 bear,
-which is where the raw fly was weakest:
+**selected on the validation split** (2021H1): 0.30 scored +11.6% mean versus
++10.9% for the raw policy, and lower for 0.2/0.4/0.5. It is not a free win on
+every held‑out window, however:
 
-| window (OOS, greedy, honest mask) | buy & hold | trend200 | raw fly | **fly + vol‑target** |
+| window (OOS, greedy, honest mask) | buy & hold | trend200 | raw fly | fly + vol‑target |
 |-----------------------------------|-----------:|---------:|--------:|---------------------:|
-| 2022 bear return %                | −38.6 | **−18.4** | −40.7 | −34.1 |
-| 2024 bull return %                | **74.1** | 52.6 | 65.8 | 67.3 |
-| full cycle 2021H2–2024 return %   | 238.5 | 255.8 | 244.7 | **261.8** |
-| ″ Sharpe                          | 1.09 | 1.32 | 1.11 | 1.25 |
-| ″ trades                          | 3 | 83 | 136 | 113 |
-| AAPL demo 2022–2024 return %      | 51.4 | **53.4** | 47.8 | 52.6 |
+| 2022 bear return %                | −38.6 | **−18.4** | −38.4 | −34.6 |
+| 2024 bull return %                | 74.1 | 52.6 | 74.2 | **76.0** |
+| full cycle 2021H2–2024 return %   | 238.5 | **255.8** | 241.1 | 225.0 |
+| • Sharpe                          | 0.83 | 0.80 | **0.83** | 0.82 |
+| • mean trades                     | 1 | 28 | **9** | 24 |
+| AAPL demo 2022–2024 return %      | 51.4 | 53.4 | 50.3 | **54.7** |
 
-It beats buy & hold and `trend200` on the full cycle while still trading far more
-than `trend200` (113 vs 83) and keeping the learned policy in the loop. (The raw
-fly remains the trades‑vs‑profit knee on the *trade count* axis; forcing extra
-churn with `FLYBRAIN_ACTION_FLOOR` turns the fly's ~36 AAPL trades into ~365 but
-cuts its AAPL return from $140k to $102k, so that knob stays off.)
+The overlay improves the 2022 bear and the 2024 bull, but gives up **16 pp** over
+the full cycle relative to the raw policy (225.0% vs 241.1%). It is a
+regime‑dependent risk tradeoff, not a universal improvement. The raw fly remains
+the stronger full‑cycle policy and still trades only ~9 times on average versus
+~28 for `trend200`. The AAPL row is a demo, not a clean holdout: AAPL has no
+pre‑2022 rows, so its scaler is fitted on the only history it has.
 
 ```bash
 FLYBRAIN_STRATEGY=fly         # default: learned policy + vol-targeting
@@ -440,12 +505,15 @@ on the validation split (never the test split):
 | `dd_penalty` retrain | ✗ over‑corrects: best bull Sharpe (1.91) but craters the cycle (70.1%) and AAPL (−10.6%) |
 | `logret` (absolute‑return) retrain | ~ best drawdown protection (2022 −18.2, ties `trend200`) and cycle Sharpe (1.39), but gives up return (158%) |
 | Seed ensemble (3 flies, prob‑averaged) | ✗ no consistent gain over a single seed (222.1 full cycle) |
-| **vol‑target overlay** | ✓ **beats the raw fly on every held‑out window** |
+| **vol-target overlay** | **regime-dependent** - helps 2022/2024/AAPL, hurts full-cycle return (225.0% vs 241.1%) |
 
-The learned policy is still shipped and still beats buy & hold on the multi‑asset
-cycle, so nothing is thrown away — the default just adds the one overlay that
-survived honest out‑of‑sample testing. `/eval_episode` keeps evaluating the
-*brain itself* on purpose.
+The learned policy is still shipped, and the portfolio policy still beats buy &
+hold on the multi‑asset cycle. The single‑asset default keeps the
+validation‑selected vol‑target overlay; the table above shows its honest
+full‑cycle cost, and `FLYBRAIN_VOL_TARGET=0` serves the raw policy.
+`/eval_episode` uses the same honest
+mask, vol‑target overlay, regime gate, and continuous sizing as live serving so
+the dashboard replay and the deployed path cannot silently diverge.
 
 #### Server online‑learning fixes (2026‑10)
 
@@ -456,9 +524,15 @@ Three bugs made the server's "Train" button worse than useless:
    dipped below 40% of max — so the brain could never commit to a strategy
    across episodes. It now only records telemetry; the entropy tuner handles
    exploration.
-2. **Every "Train" click overwrote the shipped best policy.** `_best_score`
-   started at `-999`, so the first batch always counted as a new record. It is
-   now seeded from `fly_brain_best_score.json` at startup.
+2. **Live/train clicks selected checkpoints on in‑sample scores.** A live episode
+   or a short dashboard batch used to save the "best" checkpoint from an
+   in‑sample Sharpe, and `/train_batch` then reloaded that older file, discarding
+   the policy it had just trained. Live auto‑reset is now read‑only with respect
+   to checkpoints; `/train_batch` persists its latest policy to
+   `checkpoints/fly_brain_live.pt`, a dashboard sidecar that startup ignores.
+   Deployment selection belongs to the validation‑based offline trainers, which
+   write `checkpoints/fly_brain.pt`. Startup prefers that file and no longer
+   rewrites model files from a health check.
 3. **The exploration target was near‑uniform.** `target_entropy` defaulted to
    1.30 nats (max is ln 7 ≈ 1.95), which degenerated the policy into ~2000
    random trades per episode. The server now matches the value the checkpoint
@@ -508,23 +582,34 @@ r_a = w_a * ret_a − cost_a − turnover_penalty * |dw_a|
 `turnover_penalty` is the direct, explicit fix for the churn measured in the
 cross‑sectional single‑asset run (~360 trades ≈ −70 pp of cost).
 
-### Held‑out portfolio results (`cycle_b` test = 2021H2–2024, 10 unseen tickers)
+### Held‑out portfolio results (`cycle` test = 2021H2–2024, 10 unseen tickers)
 
-Equal‑weight, long‑only, transaction costs (10 bps) included:
+Equal‑weight, long‑only, transaction costs (10 bps) included. This is the
+current `train_portfolio.py` recipe from below, evaluated once on the unseen
+ticker holdout with `run_portfolio.py`:
 
 | strategy | return % | maxDD % | Sharpe | turnover |
 |----------|---------:|--------:|-------:|---------:|
-| buy & hold (equal weight) | 84.2 | 25.8 | 1.14 | 1 |
-| `trend200` daily | **134.9** | 23.9 | **1.51** | 76 |
-| `trend200` weekly | 122.5 | 26.9 | 1.44 | 32 |
-| momentum 120d top‑3 (monthly) | **162.5** | 28.8 | 1.32 | 21 |
-| fly, *untrained prior* (softmax allocation) | 82.9 | 25.4 | 1.14 | ~0 |
+| buy & hold (equal weight, enters once) | 100.8 | 21.9 | 1.13 | 1 |
+| `trend200` (monthly decision) | 105.1 | 17.4 | 1.37 | 18.1 |
+| momentum 120d top‑3 (monthly) | 163.3 | 24.4 | 1.27 | 22.2 |
+| **fly, distilled adaptive breadth** | **446.2** | **13.7** | **1.77** | **15.3** |
+
+The fly is a 10‑episode distillation of the momentum rule plus the adaptive
+breadth gate; it is not an RL result. The separate `train_portfolio.py` and
+`run_portfolio.py` paths agree on the 446.24% number for seed 0. A 10-seed rerun
+puts the mean at **390.9 % (+290.2 pp)** with a 95 % seed interval of
+**[314.7, 467.1] %**; see *Seed distribution* below. Treat the +345.5 pp
+headline as the best of ten seeds, not the expected value.
+
+Previous results in the ablation sections below predate the corrected
+drift/turnover accounting and may not be directly comparable.
 
 Two findings:
 1. **The cross‑section is where the return is.** Rotating across 10 tickers beats
-   equal‑weight buy & hold by **+50 to +78 pp** out of sample — far more than any
+   equal‑weight buy & hold by a wide margin out of sample — far more than any
    single‑asset timing trick found above. This is the multi‑asset
-   generalisation of the `trend200` edge.
+   generalisation of the momentum edge.
 2. **The allocation rule, not the features, caused the churn.** With the
    softmax‑budget allocation the *untrained* prior already tracks buy & hold with
    near‑zero turnover (`turnover/step ≈ 0.00`), so churn is a fixable property of
@@ -789,8 +874,9 @@ through the masked trainer path and +237 pp through the unmasked evaluation path
 with the mask disabled for gated runs the two paths agree to the basis point
 (+237.40 pp both). The gate now implies `action_mask = False`.
 
-**Honest headline result** (seed 0, 10 imitation episodes, monthly, whole‑brain
-read‑out, top‑3 gate, no RL fine‑tune yet):
+**Top‑3‑gate ablation result** (historical; the current adaptive‑breadth
+recipe is the 446.2% table above). Seed 0, 10 imitation episodes, monthly,
+whole‑brain read‑out, top‑3 gate, no RL fine‑tune:
 
 | | fly | buy & hold |
 |---|---:|---:|
@@ -959,6 +1045,29 @@ testing on the 20 that remain unseen in both cases cuts the mean by ~46 pp
 result in the table (sd 9.8 vs 37.8) and 3/3 positive on every setting. More
 diversity makes the policy more average; it does not make it better.
 
+#### Wider-universe update: a sector-diverse 43-name arm recovers the 2022 protection
+
+The 32-name result above used an ad-hoc list that was not committed, so the
+wider-universe question was rerun with both universes pinned
+(`scripts/wider_universe.py`, 3 seeds, same 10 unseen tickers, same recipe):
+
+| arm | training names | cycle test excess | 2022 bear excess | cycle maxDD | bear maxDD |
+|---|---:|---:|---:|---:|---:|
+| narrow (shipped recipe) | 12 | **+280.3 pp** (CI −127.7 … +688.4) | +21.0 pp (CI −8.8 … +50.8) | 20.3 % | 12.6 % |
+| wide (all long-history non-holdout) | 43 | +245.9 pp (CI +185.9 … +306.0) | **+40.2 pp** | 22.5 % | **8.1 %** |
+
+The wide arm **recovers and improves the 2022 protection** (+40.2 vs +21.0 pp)
+and is much more stable across seeds, at the cost of ~34 pp of mean full-cycle
+return and a slightly higher full-cycle drawdown. Its 2022 interval is
+degenerate because all three seeds took the same 2022 action path; that is a
+property of this deterministic distillation, not a claim of zero market risk.
+The result does not contradict the historical 32-name arm directly: the
+composition matters, and the 43-name set includes defensive sectors. It is a
+robustness result, **not a deployment change**: the wide arm was positive on
+validation in only 1/3 seeds, so validation cannot honestly select it. The
+12-name checkpoint stays deployed; the wide arm is the better crisis hedge if a
+future selector can choose it without touching test data.
+
 Reproduce the shipped adaptive policy (`--episodes 0` = distillation only; seed 0,
 which is the run the dashboard serves):
 
@@ -974,16 +1083,56 @@ python run_portfolio.py --plan cycle --split test --rebalance-every 21 \
     --ckpt web-app/checkpoints/portfolio_fly.pt
 ```
 
-⇒ `fly=327.31%  bh=84.77%  excess=+242.54pp  sharpe=1.58  maxDD=18.89% (bh 24.90%)
-avg_positions=2.10`. The gate flags used to train a checkpoint must be passed
+⇒ `fly=446.24%  bh=100.75%  excess=+345.49pp  sharpe=1.77  maxDD=13.69% (bh 21.85%)
+avg_positions=2.88`. The gate flags used to train a checkpoint must be passed
 again to `run_portfolio.py` or the allocation will not match.
 
-**Seed sensitivity, stated plainly.** The single‑number headline is fragile: on
-S1 the fixed‑3 gate scores +237 / +427 / +150 pp across seeds 0/1/2, and `[2, 4]`
-scores +243 / +418 / +117. Seed 0 reproduces the +237.4 pp headline above
-exactly, which is why the recipe is worth quoting — but a claim that rests on one
-seed is worth about the spread between them, and that is why every table here
-quotes 3 seeds and a count of positive settings rather than a single best run.
+**Seed distribution, stated plainly.** The 10-seed rerun of the exact shipped
+recipe (`scripts/seed_sweep.py`, seeds 0–9, same 10 unseen tickers) is now in
+`reports/seed_sweep/portfolio_summary.json`:
+
+| metric (unseen test) | mean | sd | 95% seed interval |
+|---|---:|---:|---:|
+| fly return | **390.9 %** | 106.5 | **[314.7, 467.1]** |
+| buy & hold | 100.8 % | 0.0 | 100.8 |
+| fly excess | **+290.2 pp** | 106.5 | **[+214.0, +366.4]** |
+| Sharpe | 1.61 | 0.19 | [1.48, 1.75] |
+| max drawdown | 18.2 % | 7.5 | [12.9, 23.6] |
+
+All 10 seeds beat buy & hold on the unseen holdout, but seed 0 was the best
+single run (446.2 %, +345.5 pp). The honest headline is therefore **+290 pp on
+average**, not +345 pp. Four seeds also failed the validation guard
+(`val_excess < 0`); the trainer shipped the pre-RL distilled candidate in those
+runs, and all four still beat buy & hold on test. That is a useful warning:
+validation selection is noisy too, and a seed that fails validation is not
+evidence that the policy is worthless. The interval is over *training seeds on
+one shared history and universe*, not a forecast interval. Reproduce with:
+
+```bash
+python scripts/seed_sweep.py --mode portfolio --seeds 0,1,2,3,4,5,6,7,8,9
+```
+
+The earlier fixed‑3‑gate ablation reported +237 / +427 / +150 pp across seeds
+0/1/2, and `[2, 4]` reported +243 / +418 / +117 pp. Those numbers predate the
+corrected accounting and are not directly comparable.
+
+#### Cost stress: 10 bps was not the whole story
+
+`scripts/cost_stress.py` reruns the deployed checkpoint and the buy & hold
+baseline at 0, 10, 25, 50 and 100 bps per side. This is evaluation-only; the
+policy is not retrained at each cost. Fly **excess over buy & hold** (pp):
+
+| plan | 0 bps | 10 bps | 25 bps | 50 bps | 100 bps |
+|---|---:|---:|---:|---:|---:|
+| cycle test | +353.4 | +345.5 | +333.9 | +315.0 | **+279.4** |
+| 2022 bear | +15.0 | +14.6 | +14.0 | +13.0 | **+11.0** |
+| 2024 bull | −6.0 | −6.6 | −7.5 | −9.1 | **−12.1** |
+
+The monthly, low-turnover cycle and bear edges survive a 10x higher flat cost.
+The 2024 arm underperforms at every cost level, so the cost stress does not
+rescue that negative. Slippage, spread widening and market impact are still not
+modelled; the 100 bps row should be read as a *floor* on real friction, not a
+worst case. Artifact: `reports/cost_stress.json`.
 
 ### The dashboard runs the portfolio fly
 
@@ -1119,16 +1268,21 @@ the signal. Sharpe is also annualised per *decision* now (√12 for monthly, not
 Model selection uses the **validation** split only, so the validation window must
 contain the edge you are trying to learn. On the 12‑asset training universe:
 
-| split | buy & hold | trend200‑w | momentum‑top3 |
-|-------|-----------:|-----------:|--------------:|
-| `cycle` train (2015–2019) | 222.2 | 163.4 | **304.2** |
-| `cycle` **val** (2020–2021H1, incl. COVID) | 55.0 | 76.7 | **104.9** |
-| `cycle_b` **val** (2021H1, bull only) | **9.9** | 3.4 | 2.9 |
-| `cycle`/`cycle_b` test (2021H2–2024, holdout) | 84.2 | 122.5 | **162.5** |
+| split | buy & hold | trend200 | momentum‑top3 |
+|-------|-----------:|---------:|--------------:|
+| `cycle` train (2015–2019) | 259.8 | 155.3 | **298.7** |
+| `cycle` **val** (2020–2021H1, incl. COVID) | 58.5 | 84.0 | **105.9** |
+| `cycle_b` **val** (2021H1, bull only) | **9.1** | 5.9 | 2.4 |
+| `cycle`/`cycle_b` test (2021H2–2024, holdout) | 100.8 | 105.1 | **163.3** |
+
+All rows use monthly decisions (`--rebalance-every 21`) and the corrected
+drift/turnover accounting. Under a monthly environment the “daily” and
+“weekly” trend rules recompute at the same decision points, hence one
+`trend200` column here.
 
 `cycle_b`'s 6‑month bull validation window *rewards buy & hold and rejects every
 rotation rule* — selecting on it can only ever ship the buy & hold prior, even
-though the same rotation rule wins by +50 pp on train and +78 pp on test. The
+though the same rotation rule wins by +38.9 pp on train and +62.5 pp on test. The
 portfolio runs therefore use `cycle`, whose validation window spans the COVID
 crash and recovery and ranks the rotation rules the same way the test window
 does. (The test window is identical in both plans, so results stay comparable.)
@@ -1153,6 +1307,64 @@ load bit‑for‑bit.
 | default | 88 | MBON(64) + sensory(24) |
 | `--xsection` | 96 | + cross‑sectional block(8) |
 | `--full-readout` | 101 | MBON + **all 5 regions** + sensory |
+
+#### Does the connectome itself contribute? A matched A/B says "not yet"
+
+The whole-brain read-out makes every region *visible*, but visibility is not the
+same as the FlyWire wiring doing useful work. `scripts/connectome_ablation.py`
+holds the recipe, seeds, read-out, and 10 unseen tickers fixed and swaps only the
+circuit: the pinned FlyWire matrix vs the deterministic random-weight fallback
+(same 1,024 neurons, same region sizes). The checkpoints now record
+`use_connectome`, so the comparison cannot silently evaluate against a different
+architecture.
+
+| arm | cycle excess (mean) | 2022 bear excess | 2024 excess |
+|---|---:|---:|---:|
+| connectome | +280.3 pp | +21.0 pp | +11.4 pp |
+| random control | +211.0 pp | +17.5 pp | +12.5 pp |
+| paired difference (connectome − random) | +69.3 pp (CI −186.6 … +325.3) | +3.5 pp (CI −11.2 … +18.3) | −1.1 pp (CI −25.5 … +23.3) |
+
+The point estimate favours the connectome on the full cycle, but the seed
+interval is far too wide to claim a contribution; the random control actually
+wins one of three seeds on the headline window and is slightly better in 2024.
+The honest conclusion is that **the current read-out does not yet demonstrate
+that the FlyWire edges contribute** beyond a fixed random projection plus the
+sensory summary. The connectome remains a biologically grounded feature
+generator and a display/ablation surface, but the README no longer claims it is
+the source of the trading edge. `--no-connectome` is now a first-class matched
+control in `train_portfolio.py` and `run_portfolio.py`.
+
+#### Verified pinned rebuild does not change the conclusion
+
+The deployed cache's support is real (58,421 pinned FlyWire edges plus 1,024
+diagonal self-connections), but its values are a legacy transform. I rebuilt the
+cache byte-for-byte from the pinned selection (58,421 real edges, no synthetic
+self-connections), ran the same 3-seed A/B, and restored the deployed cache
+afterward. The random-control difference is exactly 0.0 pp, confirming the swap
+only affected the connectome arm.
+
+| plan | verified connectome | random control | paired connectome − random |
+|---|---:|---:|---:|
+| cycle | +251.2 pp | +211.0 pp | +40.2 pp (CI −218.1 … +298.5) |
+| 2022 bear | +36.3 pp | +17.5 pp | +18.8 pp (CI −19.8 … +57.4) |
+| 2024 | +28.3 pp | +12.5 pp | +15.8 pp (CI −36.8 … +68.4) |
+
+Paired verified-minus-legacy differences are also indistinguishable from zero:
+cycle **−29.2 pp** (CI −244.7 … +186.4), 2022 **+15.3 pp** (CI −18.8 … +49.4),
+2024 **+16.9 pp** (CI −50.1 … +84.0). So the genuine circuit is not worse, but it
+is not a demonstrated source of edge either. The conclusion stays: the FlyWire
+matrix is a biologically grounded feature generator, not a proven alpha source.
+
+Reproduce with:
+
+```bash
+python scripts/connectome_ablation.py --seeds 0,1,2
+python scripts/verified_cache_ab.py --seeds 0,1,2
+```
+
+Artifacts: `reports/connectome_ablation.json`,
+`reports/connectome_ablation_verified.json`,
+`reports/connectome_cache_ab.json`, `reports/connectome_audit.json`.
 
 
 ## Connectome Mode
@@ -1347,17 +1559,48 @@ The observation ends with a 4‑value **portfolio‑state block** —
 `[exposure fraction, cash fraction, unrealised PnL, steps since last trade]`.
 Without it the policy could not tell "about to open a position" from "already
 fully invested", which is why the trained policy used to hover at ~53 % exposure
-and structurally could not match a bull run. `config.OBS_DIM = 394`
-(390 market + 4 portfolio); the market block is unchanged, and every consumer
+and structurally could not match a bull run. `config.OBS_DIM = 398`
+(390 market + 4 portfolio + 4 regime); the market block is unchanged, and every consumer
 that used to index the tail of the observation (e.g. `cur_obs[-8:]`) now uses
 `config.CUR_INDICATOR_SLICE`.
 
 ### Buy & hold is the floor, not the target
 The actor is initialised so its default action is **Buy 100 %, then Hold** —
 i.e. buy & hold. A trained checkpoint is shipped **only if its validation excess
-return is strictly positive**; otherwise `train.py` writes the untrained
-buy & hold prior instead. The deployed policy therefore cannot lose to buy &
-hold by construction — it can only add value on top of it.
+return is strictly positive**; otherwise the trainer falls back to the pre-RL
+prior. In the single-asset path that prior is effectively buy & hold (the
+heuristic starts at `Buy 100%` and then holds); in the portfolio path it is the
+distilled pre-fine-tune candidate, not a literal buy & hold policy. So the guard
+is a selection heuristic, not a mathematical guarantee that a rejected
+checkpoint equals the benchmark. The portfolio seed sweep reports the
+guard-rejected seeds explicitly for this reason.
+
+## Reproducibility
+
+- `python scripts/data_manifest.py` writes `data_manifest.json`: byte size,
+  SHA‑256, date coverage and per‑split row counts for every local CSV. Commit
+  the manifest with published numbers; the raw CSVs stay gitignored.
+- The single‑asset recipe above writes checkpoint metadata (plan, train window,
+  normalisation, reward mode, selection metric, seed). Startup loads legacy checkpoints
+  tolerantly but warns; new checkpoints fail loudly on an architecture mismatch.
+- Startup also aligns the serving scaler to the checkpoint's `train_window`.
+  Tickers that do not cover that window (AAPL starts in 2022) fall back to the
+  server train split; AAPL therefore remains a demo, not a clean holdout.
+- The portfolio recipe below pins the ticker universe, plan, rebalance cadence,
+  transaction cost and allocation gate in the checkpoint metadata.
+- The portfolio headline now has a **10-seed interval** (`scripts/seed_sweep.py`):
+  +290.2 pp mean test excess, 95 % seed interval [+214.0, +366.4] pp, 10/10 seeds
+  positive.
+- The single-asset headline has a **10-path evaluation interval**
+  (`scripts/eval_seed_ci.py`): +0.15 pp excess, 95 % interval [−2.28, +2.58] pp,
+  i.e. flat. This is still **one training seed**; a full training-seed sweep
+  needs ~2 hours per 100-episode run. `scripts/seed_sweep.py --mode single`
+  supports that run when the compute is available.
+- Costs are a flat 10 bps per side in the headline; `scripts/cost_stress.py`
+  reruns the deployed portfolio checkpoint out to 100 bps. Slippage, borrow,
+  spread widening and market impact are still not explicitly modelled;
+  large‑cap survivorship/selection bias remains. Neither interval is a forecast
+  guarantee.
 
 ## Roadmap
 | Priority | Item |
@@ -1370,21 +1613,25 @@ hold by construction — it can only add value on top of it.
 | P1 | ✅ Split-aware training/eval + honest (median/held-out) API reporting |
 | P1 | ✅ Benchmark-relative (`excess`) objective so "beat buy & hold" is trained for |
 | P1 | ✅ Deterministic feature encoding + live sensory channel (policy can see the market) |
-| P1 | Make `per_feature` indicator normalisation the default and retrain |
+| P1 | DONE - `per_feature` is the default and both trainers fit it on train only |
 | P0 | ✅ **Multi‑asset portfolio environment + baselines** (`portfolio_env.py`, `run_portfolio.py`) |
-| P0 | ✅ **Fly beats buy & hold on unseen portfolios** — +26 pp on the original split, +2.9 pp walk‑forward fold mean from scratch, and **+237 pp on the original holdout with a top‑k‑gated warm start from the momentum rule** |
+| P0 | ✅ **Fly beats buy & hold on the unseen portfolio holdout** - the current distilled recipe is **+290.2 pp** mean over 10 seeds (95 % interval [+214.0, +366.4] pp), 10/10 positive. Seed 0 is the +345.5 pp best case (446.2 % vs 100.8 %). Earlier scratch/walk-forward runs were far smaller (+2.9 pp fold mean), so this is recipe-specific, not a general claim. |
 | P0 | ✅ **Softmax conviction allocation** with an explicit turnover penalty (fixes churn) |
 | P1 | ✅ **Whole‑brain read‑out** (`--full-readout`: all regions feed the policy) |
 | P1 | ✅ **Portfolio trainer** (`train_portfolio.py`) — learn the cross‑section allocation |
 | P1 | ✅ **Adaptive breadth** (`--alloc-gate positive` ± `--alloc-min-k`/`--alloc-max-k`): the held breadth k is a policy output; ties fixed‑3 on mean return and wins on the ambiguous‑breadth holdout |
 | P1 | ✅ **Portfolio tab in the dashboard** (`GET /portfolio_eval`) — the real holdout backtest with the three baselines and equity curves |
 | P1 | Wire the adaptive breadth into RL so k is *learned*, not just selected by the policy's argmax (needs a pooled cross‑sectional representation — asset‑local features cannot decide breadth) |
-| P1 | Recover the wider‑universe bear protection (32‑ticker training currently halves 2022 downside protection) |
-| P1 | Make the connectome block actually contribute (fix AL→KC→MBON cascade / signals) |
-| P1 | Wire real cell‑type anatomy instead of index ranges |
-| P1 | Adopt a genuine, well‑connected connectome subset (or drop the claim) |
-| P2 | Select the best checkpoint by held-out, not in-sample, performance |
-| P2 | Remove `flywire_data/` duplication; retire legacy scripts |
+| P1 | ✅ Wider-universe bear protection: a sector-diverse 43-name arm lifts 2022 excess from +21.0 to **+40.2 pp** and cuts bear maxDD from 12.6 % to 8.1 %, at the cost of ~34 pp full-cycle return; not validation-selectable, so not deployed (`scripts/wider_universe.py`) |
+| P1 | Make the connectome block actually contribute: matched A/B is **not significant** on the legacy cache (cycle +69 pp, CI −187 … +325; 2024 −1 pp) or on the verified pinned rebuild (cycle +40 pp, CI −218 … +298; 2024 +16 pp, CI −37 … +68). The claim is softened and `--no-connectome` is the control. |
+| P1 | Wire real cell-type anatomy instead of index ranges — **blocked by local data**: the FlyWire v783 completeness file has only `ID` + `Completed`, no cell-type labels; needs an external annotation source |
+| P1 | Genuine subset: pinned selection reproduces **58,421 real FlyWire edges**; cached values remain a legacy unverified transform, and default cache paths are now cwd-independent. Cell-type labels are still unavailable. |
+| P2 | DONE - offline trainers select on validation, and `/promote` gates the dashboard sidecar on validation |
+| P2 | DONE - `scripts/data_manifest.py` writes SHA-256/coverage manifest |
+| P2 | ✅ `scripts/seed_sweep.py` reports multi-seed confidence intervals (portfolio recipe: n=10, +290.2 pp mean, [214.0, 366.4] pp) |
+| P2 | ✅ `scripts/eval_seed_ci.py` reports the single-asset evaluation-path interval (+0.15 pp, [−2.28, +2.58] pp, n=10). A **training-seed** sweep for the 100-episode single-asset recipe is still open (~2 h/seed). |
+| P2 | ✅ `scripts/cost_stress.py` reruns the portfolio checkpoint at 0/10/25/50/100 bps: cycle excess +353 → +279 pp, 2022 +15 → +11 pp, 2024 −6 → −12 pp. Slippage/impact remain unmodelled. |
+| P2 | DONE - dead best-score checkpoint code removed; `flywire_data/` duplication and legacy scripts remain |
 
 ---
 ### How to Contribute

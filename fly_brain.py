@@ -332,6 +332,15 @@ class MaleCNS1024Simulator:
     IDX_MBON_RATIO  = 64 / 1024   # ~6.25%
 
     def __init__(self, use_connectome=False, connectome_dir="flywire_data", weight_cache="flywire_weights", N_NEURONS=None):
+        # Default data/cache locations are anchored to the repository, not to
+        # the process cwd. The server used to load a different cache when started
+        # from web-app/ (a legacy 1,130-edge file-order matrix) than when started
+        # from the repo root, which silently changed the circuit.
+        base = Path(__file__).resolve().parent
+        if connectome_dir == "flywire_data":
+            connectome_dir = str(base / "flywire_data")
+        if weight_cache == "flywire_weights":
+            weight_cache = str(base / "flywire_weights")
         self.N_NEURONS = N_NEURONS if N_NEURONS is not None else self.DEFAULT_N_NEURONS
         self.IDX_AL   = slice(0, int(round(self.N_NEURONS * self.IDX_AL_RATIO)))
         self.IDX_KC   = slice(int(round(self.N_NEURONS * self.IDX_AL_RATIO)),
@@ -611,6 +620,11 @@ class MaleCNS1024Simulator:
         data parallelism over observations, not a bigger brain.  Use it for a
         cross-section of tickers, or to encode a whole episode at once (the
         encoding is stateless, so time steps do not depend on each other).
+
+        The final per-neuron membrane potential and spike rate are also
+        published on the simulator as the mean across the batch. That keeps
+        live portfolio telemetry (3-D brain, region voltages, dopamine panel)
+        synchronized with the encoding that just happened.
         """
         steps = self.settle_steps if steps is None else steps
         if reward:
@@ -640,6 +654,15 @@ class MaleCNS1024Simulator:
                 V += np.random.normal(0, self.noise_std, size=(N, n_obs)).astype(np.float32)
             S = (V > self.threshold).astype(np.float32)
             V[S > 0] = 0.0
+
+        # ``encode`` publishes the final state for the live telemetry panels.
+        # The batch path used to leave ``V``/``last_spikes`` untouched, so the
+        # portfolio dashboard showed a stale checkpoint state while claiming
+        # to be live. Publish a cross-sectional mean per neuron instead: the
+        # UI wants one activity value per neuron, not one per asset.
+        self.V = V.mean(axis=1).astype(np.float32)
+        self.last_spikes = S.mean(axis=1).astype(np.float32)
+        self._inh = float(np.mean(inh))
         return S.T
 
 
@@ -672,6 +695,9 @@ class FlyBrainAgent(nn.Module):
             N_NEURONS=N_NEURONS
         )
         self.obs_dim = obs_dim
+        # Recorded in checkpoint metadata so an evaluation path cannot silently
+        # swap the trained circuit for the random-weight fallback (or vice versa).
+        self.use_connectome = bool(use_connectome)
         # Cross-sectional observations add a *relative-strength* channel to the
         # sensory summary the read-out consumes. The spiking simulator ignores
         # the extra tail, so this must be wired into sensory_from_obs or the
@@ -1009,6 +1035,28 @@ class FlyBrainAgent(nn.Module):
         if len(self.replay_buffer) > self.max_buffer_size:
             self.replay_buffer.pop(0)
 
+    def checkpoint_metadata(self):
+        """Architecture/config description saved with every new checkpoint."""
+        meta = {
+            "format_version": 2,
+            "model": "FlyBrainAgent",
+            "obs_dim": int(self.obs_dim),
+            "n_neurons": int(self.N_NEURONS),
+            "use_connectome": bool(self.use_connectome),
+            "use_xsection": bool(self.use_xsection),
+            "use_full_readout": bool(self.use_full_readout),
+            "full_readout_proj": int(self.full_readout_proj),
+            "memory_rho": float(self.memory_rho),
+            "readout_features": int(self.feature_encoder[0].in_features),
+            "n_actions": int(self.actor[-1].out_features),
+        }
+        # Trainers attach plan/split/preprocessing context without teaching the
+        # architecture validator about training-time concerns.
+        extra = getattr(self, "checkpoint_context", None)
+        if isinstance(extra, dict):
+            meta.update(extra)
+        return meta
+
     def get_policy_state(self):
         return {
             'model_state': self.state_dict(),
@@ -1020,9 +1068,53 @@ class FlyBrainAgent(nn.Module):
                 '_inh': float(self.simulator._inh),
                 'dopamine_level': float(self.simulator.dopamine_level),
             },
+            'meta': self.checkpoint_metadata(),
         }
 
-    def set_policy_state(self, state):
+    def _checkpoint_mismatches(self, state):
+        """Return human-readable architecture mismatches for a checkpoint."""
+        meta = state.get("meta") if isinstance(state, dict) else None
+        if not meta:
+            return []
+        own = self.checkpoint_metadata()
+        mismatches = []
+        for key in ("obs_dim", "n_neurons", "use_connectome", "use_xsection",
+                    "use_full_readout", "full_readout_proj", "memory_rho",
+                    "readout_features", "n_actions"):
+            if key in meta and meta[key] != own[key]:
+                mismatches.append(f"{key}: checkpoint={meta[key]!r} model={own[key]!r}")
+        ms = state.get("model_state", {}) if isinstance(state, dict) else {}
+        own_ms = self.state_dict()
+        for key, value in ms.items():
+            if key in own_ms and hasattr(value, "shape"):
+                if tuple(value.shape) != tuple(own_ms[key].shape):
+                    mismatches.append(
+                        f"{key} shape: checkpoint={tuple(value.shape)} "
+                        f"model={tuple(own_ms[key].shape)}")
+        return mismatches
+
+    def set_policy_state(self, state, *, strict=None):
+        """Load a checkpoint.
+
+        New checkpoints carry ``meta`` and are validated strictly by default:
+        an architecture mismatch raises instead of leaving random weights in
+        place. Legacy checkpoints without metadata keep the old tolerant path,
+        and callers can request it explicitly with ``strict=False``.
+        """
+        # Accept the resume wrapper written by the trainers:
+        # ``{"state": <policy state>, "meta": {...}}``.
+        if isinstance(state, dict) and "state" in state and "model_state" not in state:
+            state = state["state"]
+        meta = state.get("meta") if isinstance(state, dict) else None
+        if strict is None:
+            strict = bool(meta)
+        mismatches = self._checkpoint_mismatches(state)
+        if mismatches:
+            message = "checkpoint architecture mismatch: " + "; ".join(mismatches)
+            if strict:
+                raise ValueError(message)
+            print(f"Warning: {message}; loading only shape-compatible tensors")
+
         if state and 'model_state' in state:
             # ``strict=False`` tolerates missing/unexpected *keys* (e.g. a
             # checkpoint saved before the target critic existed) without

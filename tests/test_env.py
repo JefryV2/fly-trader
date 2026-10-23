@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from config import DATA_DIR, OBS_DIM, SPLITS
-from env import FlyTradeEnv
+from config import DATA_DIR, OBS_DIM, PORTFOLIO_SLICE, SPLITS
+from env import FlyTradeEnv, fit_indicator_stats
 
 
 AAPL = DATA_DIR / "AAPL_daily.csv"
@@ -24,6 +24,21 @@ def test_date_slicing_respects_bounds():
     assert env.data.index.min() >= np.datetime64(start)
     assert env.data.index.max() <= np.datetime64(end)
     assert env.n_steps > 0
+
+
+def test_validation_reuses_train_only_indicator_scaler():
+    train_mean, train_std = fit_indicator_stats(
+        AAPL, start_date="2022-01-01", end_date="2022-06-30")
+    env = FlyTradeEnv(
+        AAPL, window_size=30, start_date="2023-01-01", end_date="2023-06-30",
+        indicator_stats=(train_mean, train_std))
+    assert np.allclose(env.ind_mean, train_mean)
+    assert np.allclose(env.ind_std, train_std)
+
+
+def test_indicator_stats_shape_is_validated():
+    with pytest.raises(ValueError, match="indicator_stats"):
+        FlyTradeEnv(AAPL, window_size=30, indicator_stats=(np.zeros(7), np.ones(7)))
 
 
 def test_portfolio_accounting_invariant():
@@ -61,6 +76,28 @@ def test_cannot_sell_without_shares_is_noop():
     _obs, _r, _done, _trunc, info = env.step(6)  # Sell 100% with 0 shares
     assert info["portfolio_value"] == pytest.approx(env.initial_cash)
     assert env.shares == 0
+
+
+def test_trade_recency_updates_outside_shaped_reward():
+    """The observation's steps-since-trade feature must reset after a trade.
+
+    It used to be updated only inside the legacy ``shaped`` reward branch, so
+    the default ``excess`` objective reported a monotonically increasing stale
+    value even immediately after a buy.
+    """
+    env = FlyTradeEnv(AAPL, window_size=30, start_date="2022-01-01",
+                      end_date="2022-06-30", reward_mode="excess")
+    env.reset()
+    for _ in range(5):
+        _obs, _r, _done, _trunc, _info = env.step(0)
+
+    obs, _r, _done, _trunc, _info = env.step(3)  # Buy 100%
+    assert env.last_trade_step == env.current_step
+    assert env.last_trade_step > 0
+    assert obs[PORTFOLIO_SLICE][3] == pytest.approx(0.0, abs=1e-6)
+
+    obs_next, _r, _done, _trunc, _info = env.step(0)
+    assert obs_next[PORTFOLIO_SLICE][3] == pytest.approx(1.0 / 30.0, abs=1e-6)
 
 
 # ── reward_mode semantics (benchmark-relative objective) ───────────────────

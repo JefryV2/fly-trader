@@ -48,7 +48,7 @@ def plan(args):
     return SPLIT_PLANS[args.plan]
 
 
-def make_env(ticker, split, args):
+def make_env(ticker, split, args, indicator_stats=None):
     start, end = plan(args)[split]
     return FlyTradeEnv(
         DATA_DIR / f"{ticker}_daily.csv",
@@ -60,7 +60,25 @@ def make_env(ticker, split, args):
         reward_mode=args.reward_mode,
         dd_penalty=args.dd_penalty,
         use_xsection=getattr(args, "use_xsection", False),
+        indicator_stats=indicator_stats,
     )
+
+
+def train_scalers(tickers, args):
+    """Fit one train-only indicator scaler per ticker.
+
+    The scaler is fitted on the same slice each ticker uses for training, then
+    reused for validation, test, and live-like evaluation. This is the
+    walk-forward boundary: a validation/test window never contributes its own
+    mean or standard deviation to preprocessing.
+    """
+    out = {}
+    for t in dict.fromkeys(tickers):
+        try:
+            out[t] = make_env(t, "train", args).indicator_stats
+        except (AssertionError, FileNotFoundError, ValueError) as exc:
+            print(f"[train] WARNING: cannot fit scaler for {t}: {exc}")
+    return out
 
 
 def usable_tickers(tickers, args):
@@ -75,7 +93,8 @@ def usable_tickers(tickers, args):
     return ok
 
 
-def evaluate_split(agent, tickers, split, args, *, deterministic=True, n_seeds=1):
+def evaluate_split(agent, tickers, split, args, *, deterministic=True, n_seeds=1,
+                   indicator_stats=None, return_per_seed=False):
     """Fly vs buy&hold on a split, via the shared roll-out path.
 
     ``deterministic=False`` samples from the learned action distribution and
@@ -83,24 +102,49 @@ def evaluate_split(agent, tickers, split, args, *, deterministic=True, n_seeds=1
     selection*: the greedy (argmax) policy collapses to buy & hold early in
     training, which makes the deterministic excess identically zero and gives no
     signal to choose between checkpoints.
+
+    ``indicator_stats`` maps ticker -> (mean, std) fitted on the train split.
+    It must be supplied for validation/test calls so preprocessing does not
+    leak future statistics.
     """
+    stats_by_ticker = indicator_stats or {}
     per_ticker = {}
+    # Keep each evaluation seed separately when requested. The existing callers
+    # use the averaged result; the CI reporter needs the distribution, not just
+    # the mean, and re-running the whole roll-out just to recover it would double
+    # the cost.
+    per_seed_raw = [
+        {"fly": [], "buyhold": [], "sharpe": [], "maxdd": [],
+         "bh_maxdd": [], "trades": []}
+        for _ in range(n_seeds)
+    ]
     for t in tickers:
         flys, bhs, shs, trs, dds, bh_dds = [], [], [], [], [], []
         for k in range(n_seeds):
             def factory(t=t):
-                return make_env(t, split, args)
+                return make_env(t, split, args,
+                                indicator_stats=stats_by_ticker.get(t))
             res = compare_on_env(
                 factory, agent, deterministic=deterministic,
                 seed=args.seed + 1009 * k,
                 include_legacy=False, include_baselines=True,
             )
-            flys.append(float(res["fly_honest"]["total_return_pct"]))
+            fly = float(res["fly_honest"]["total_return_pct"])
+            bh = float(res["buy_hold"]["total_return_pct"])
+            flys.append(fly)
             shs.append(float(res["fly_honest"]["sharpe"]))
             dds.append(float(res["fly_honest"]["max_drawdown_pct"]))
-            bhs.append(float(res["buy_hold"]["total_return_pct"]))
+            bhs.append(bh)
             bh_dds.append(float(res["buy_hold"]["max_drawdown_pct"]))
             trs.append(int(res["fly_honest"]["trades"]))
+            per_seed_raw[k]["fly"].append(fly)
+            per_seed_raw[k]["buyhold"].append(bh)
+            per_seed_raw[k]["sharpe"].append(float(res["fly_honest"]["sharpe"]))
+            per_seed_raw[k]["maxdd"].append(
+                float(res["fly_honest"]["max_drawdown_pct"]))
+            per_seed_raw[k]["bh_maxdd"].append(
+                float(res["buy_hold"]["max_drawdown_pct"]))
+            per_seed_raw[k]["trades"].append(int(res["fly_honest"]["trades"]))
         f, b = float(np.mean(flys)), float(np.mean(bhs))
         per_ticker[t] = {
             "fly": f, "buyhold": b, "excess": f - b,
@@ -112,7 +156,7 @@ def evaluate_split(agent, tickers, split, args, *, deterministic=True, n_seeds=1
     sh = [v["sharpe"] for v in per_ticker.values()]
     dd = [v["maxdd"] for v in per_ticker.values()]
     bh_dd = [v["bh_maxdd"] for v in per_ticker.values()]
-    return {
+    out = {
         "split": split,
         "mean_fly": float(np.mean(fly)) if fly else 0.0,
         "mean_buyhold": float(np.mean(bh)) if bh else 0.0,
@@ -122,6 +166,20 @@ def evaluate_split(agent, tickers, split, args, *, deterministic=True, n_seeds=1
         "mean_bh_maxdd": float(np.mean(bh_dd)) if bh_dd else 0.0,
         "per_ticker": per_ticker,
     }
+    if return_per_seed:
+        out["per_seed"] = [
+            {
+                "fly": float(np.mean(row["fly"])),
+                "buyhold": float(np.mean(row["buyhold"])),
+                "excess": float(np.mean(row["fly"]) - np.mean(row["buyhold"])),
+                "sharpe": float(np.mean(row["sharpe"])),
+                "maxdd": float(np.mean(row["maxdd"])),
+                "bh_maxdd": float(np.mean(row["bh_maxdd"])),
+                "trades": float(np.mean(row["trades"])),
+            }
+            for row in per_seed_raw
+        ]
+    return out
 
 
 def selection_score(val, select_by):
@@ -229,7 +287,16 @@ def main():
     tickers = usable_tickers(tickers, args)
     if not tickers:
         raise SystemExit(f"No tickers have enough data for plan '{args.plan}'")
-    probe = make_env(tickers[0], "train", args)
+
+    # Fit preprocessing on train only, including holdout tickers (their train
+    # slice is not used to update the model, but it is safe to fit the scaler
+    # there; the test window still never contributes statistics).
+    scalers = train_scalers(tickers + holdout, args)
+    tickers = [t for t in tickers if t in scalers]
+    if not tickers:
+        raise SystemExit("No tickers have a usable train-only indicator scaler")
+    probe = make_env(tickers[0], "train", args,
+                     indicator_stats=scalers[tickers[0]])
     obs_dim = int(probe.observation_space.shape[0])
     print(f"[train] plan={args.plan} obs_dim={obs_dim} reward_mode={args.reward_mode} "
           f"mask={args.mask_preset} select_by={args.select_by} "
@@ -245,6 +312,20 @@ def main():
     agent.action_floor = args.action_floor
     if args.target_entropy is not None:
         agent.target_entropy = float(args.target_entropy)
+    agent.checkpoint_context = {
+        "plan": args.plan,
+        "train_window": list(plan(args)["train"]),
+        "indicator_norm": args.indicator_norm,
+        "reward_mode": args.reward_mode,
+        "mask_preset": args.mask_preset,
+        "select_by": args.select_by,
+        "seed": int(args.seed),
+        "episodes": int(args.episodes),
+        # Record the universe explicitly: a checkpoint without it cannot be
+        # reproduced from the file alone (and old checkpoints genuinely omit it).
+        "train_tickers": list(tickers),
+        "holdout": list(holdout),
+    }
 
     # --- Reboot/power-cut-safe resume -------------------------------------
     # The `--out` checkpoint holds the *best* policy (a plain state dict, so the
@@ -280,7 +361,8 @@ def main():
     # running best_score, so the (expensive) baseline eval is skipped.
     need_baseline = not (resumed and best_score is not None)
     if need_baseline:
-        baseline = evaluate_split(agent, tickers, "val", args, deterministic=True, n_seeds=1)
+        baseline = evaluate_split(agent, tickers, "val", args, deterministic=True,
+                                  n_seeds=1, indicator_stats=scalers)
         if not args.guard:
             guard = -1e9
         elif args.select_by == "val_excess":
@@ -298,7 +380,8 @@ def main():
     best_score = float(best_score)
     for ep in range(start_ep, args.episodes):
         ticker = tickers[ep % len(tickers)]
-        env = make_env(ticker, "train", args)
+        env = make_env(ticker, "train", args,
+                       indicator_stats=scalers.get(ticker))
         eps = max(0.05, args.epsilon * (args.epsilon_decay ** ep))
         agent.set_lr(args.lr * (args.lr_decay ** ep))
         result = train_episode(
@@ -330,7 +413,8 @@ def main():
 
         if (ep + 1) % args.eval_every == 0 or ep == args.episodes - 1:
             val = evaluate_split(agent, tickers, "val", args,
-                                 deterministic=False, n_seeds=args.val_seeds)
+                                 deterministic=False, n_seeds=args.val_seeds,
+                                 indicator_stats=scalers)
             score = selection_score(val, args.select_by)
             tag = ""
             if score > best_score:
@@ -358,9 +442,12 @@ def main():
         # IS buy & hold. Better to tie the benchmark than to ship a policy that
         # loses to it.
         agent.set_policy_state(prior_state)
+        if isinstance(getattr(agent, "checkpoint_context", None), dict):
+            agent.checkpoint_context["guard_failed"] = True
+            agent.checkpoint_context["guard_threshold"] = float(guard)
         torch.save(agent.get_policy_state(), args.out)
         print("[train] no checkpoint beat buy & hold on validation -> "
-              "shipping the buy & hold prior (ties the benchmark)")
+              "shipping the pre-RL prior (guard_failed=True)")
 
     # Clean finish: drop the resume checkpoint so a re-run starts fresh.
     if Path(latest_path).exists():
@@ -373,10 +460,13 @@ def main():
     # Final out-of-sample test report (deterministic = greedy deployment policy).
     if Path(args.out).exists():
         agent.set_policy_state(torch.load(args.out, map_location="cpu", weights_only=False))
-    report_tickers = holdout or tickers
+    report_tickers = [t for t in (holdout or tickers) if t in scalers]
     if holdout:
-        print(f"\n[train] TICKER-HOLDOUT test on {len(holdout)} unseen tickers: {holdout}")
-    test = evaluate_split(agent, report_tickers, "test", args, deterministic=True, n_seeds=1)
+        print(f"\n[train] TICKER-HOLDOUT test on {len(report_tickers)} unseen tickers: {report_tickers}")
+    if not report_tickers:
+        raise SystemExit("No report tickers have a train-only indicator scaler")
+    test = evaluate_split(agent, report_tickers, "test", args, deterministic=True,
+                          n_seeds=1, indicator_stats=scalers)
     print("\n=== Out-of-sample TEST (deterministic, honest mask) ===")
     header = (f"{'ticker':<8} {'fly%':>9} {'buyhold%':>10} {'excess%':>9} "
               f"{'sharpe':>8} {'flyMaxDD%':>10} {'bhMaxDD%':>9} {'trades':>7}")
@@ -391,13 +481,14 @@ def main():
           f"{test['mean_maxdd']:>10.2f} {test['mean_bh_maxdd']:>9.2f}")
     verdict = "BEATS" if test["mean_excess"] > 0 else "trails"
     print(f"\n[train] out-of-sample (greedy): fly {verdict} buy & hold by "
-          f"{test['mean_excess']:+.2f} pp (mean return); "
+          f"{abs(test['mean_excess']):.2f} pp (mean return); "
           f"max drawdown {test['mean_maxdd']:.2f}% vs buy&hold {test['mean_bh_maxdd']:.2f}%")
 
     # Stochastic test: samples the learned action distribution (what the policy
     # actually believes) rather than its single greedy mode.
     test_s = evaluate_split(agent, report_tickers, "test", args,
-                            deterministic=False, n_seeds=args.val_seeds)
+                            deterministic=False, n_seeds=args.val_seeds,
+                            indicator_stats=scalers)
     print(f"[train] out-of-sample (sampled, {args.val_seeds} seeds): "
           f"fly={test_s['mean_fly']:>8.2f}% bh={test_s['mean_buyhold']:>8.2f}% "
           f"excess={test_s['mean_excess']:>7.2f}% sharpe={test_s['mean_sharpe']:.3f}")

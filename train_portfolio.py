@@ -49,11 +49,12 @@ ROOT = Path(__file__).resolve().parent
 import sys
 sys.path.insert(0, str(ROOT))  # noqa: E402
 
-from config import (CHECKPOINT_DIR, SPLIT_PLANS, TICKERS,  # noqa: E402
+from config import (CHECKPOINT_DIR, DATA_DIR, SPLIT_PLANS, TICKERS,  # noqa: E402
                     WALKFORWARD_FOLDS, WALKFORWARD_TEST)
+from env import fit_indicator_stats  # noqa: E402
 from fly_brain import FlyBrainAgent  # noqa: E402
-from portfolio_env import (PortfolioEnv, buy_hold_weights, momentum_weights,  # noqa: E402
-                           run_static_weights)
+from portfolio_env import (PortfolioEnv, momentum_weights,  # noqa: E402
+                           run_buy_and_hold)
 from trainer import RewardNormalizer  # noqa: E402
 
 DEFAULT_HOLDOUT = "NVDA,JPM,JNJ,XOM,WMT,CAT,META,DIS,T,LIN"
@@ -89,7 +90,19 @@ def fold_dates(args, split: str):
     return split_dates(args.plan, split)
 
 
-def make_env(tickers, plan, split, args) -> PortfolioEnv:
+def build_scalers(tickers, args) -> dict:
+    """Fit one train-only indicator scaler per ticker for this fold/plan."""
+    start, end = fold_dates(args, "train")
+    scalers = {}
+    for t in dict.fromkeys(tickers):
+        try:
+            scalers[t] = fit_indicator_stats(DATA_DIR / f"{t}_daily.csv", start, end)
+        except (AssertionError, FileNotFoundError, ValueError) as exc:
+            print(f"[portfolio-train] WARNING: no train scaler for {t}: {exc}")
+    return scalers
+
+
+def make_env(tickers, plan, split, args, indicator_stats=None) -> PortfolioEnv:
     start, end = fold_dates(args, split)
     return PortfolioEnv(
         tickers, start_date=start, end_date=end, window_size=30,
@@ -102,6 +115,7 @@ def make_env(tickers, plan, split, args) -> PortfolioEnv:
         alloc_min_k=getattr(args, "alloc_min_k", 0),
         alloc_max_k=getattr(args, "alloc_max_k", None),
         action_mask=not args.no_action_mask,
+        indicator_stats=indicator_stats,
     )
 
 
@@ -222,9 +236,11 @@ def train_episode(agent, env, *, epsilon, train_every, batch_size, min_buffer,
 
 
 @torch.no_grad()
-def evaluate(agent, tickers, plan, split, args, *, n_seeds=1, max_steps=None) -> dict:
-    env = make_env(tickers, plan, split, args)
-    bh = run_static_weights(env, buy_hold_weights, 1)
+def evaluate(agent, tickers, plan, split, args, *, n_seeds=1, max_steps=None,
+             indicator_stats=None) -> dict:
+    env = make_env(tickers, plan, split, args,
+                   indicator_stats=indicator_stats)
+    bh = run_buy_and_hold(env)
     flys, shs, dds, tos, poss = [], [], [], [], []
     for k in range(n_seeds):
         rng = np.random.default_rng(args.seed + 1009 * k)
@@ -305,6 +321,10 @@ def main():
                    help="temperature of the softmax conviction allocation")
     p.add_argument("--indicator-norm", default="per_feature")
     p.add_argument("--xsection", dest="use_xsection", action="store_true")
+    p.add_argument("--no-connectome", dest="use_connectome", action="store_false",
+                   default=True,
+                   help="use the random-weight circuit instead of the FlyWire cache "
+                        "(matched A/B control; the checkpoint records the choice)")
     p.add_argument("--full-readout", dest="use_full_readout", action="store_true",
                    help="let the read-out draw on ALL brain regions (AL/KC/CX/DAN/MBON)")
     p.add_argument("--full-readout-proj", type=int, default=8,
@@ -373,7 +393,17 @@ def main():
     else:
         tickers = [t for t in TICKERS if t not in holdout]
 
-    probe = make_env(tickers, args.plan, "train", args)
+    # Fit preprocessing on the train slice only. Validation/test and the
+    # ticker-holdout report reuse this mapping, so no future statistics leak
+    # into the observations.
+    scalers = build_scalers(tickers + holdout, args)
+    tickers = [t for t in tickers if t in scalers]
+    holdout = [t for t in holdout if t in scalers]
+    if not tickers:
+        raise SystemExit("No training tickers have a train-only indicator scaler")
+
+    probe = make_env(tickers, args.plan, "train", args,
+                     indicator_stats=scalers)
     print(f"[portfolio-train] n_assets={probe.n_assets} plan={args.plan} "
           f"steps={probe.n_steps} obs_dim={probe.obs_dim} "
           f"beta={args.beta} turnover_penalty={args.turnover_penalty} "
@@ -385,7 +415,8 @@ def main():
     print(f"[portfolio-train] tickers={tickers}")
     print(f"[portfolio-train] holdout ={holdout}")
 
-    agent = FlyBrainAgent(obs_dim=probe.obs_dim, use_connectome=True,
+    agent = FlyBrainAgent(obs_dim=probe.obs_dim,
+                          use_connectome=args.use_connectome,
                           use_xsection=args.use_xsection,
                           use_full_readout=args.use_full_readout,
                           full_readout_proj=args.full_readout_proj)
@@ -393,6 +424,24 @@ def main():
     agent.buy_margin_coef = 0.0
     if args.target_entropy is not None:
         agent.target_entropy = float(args.target_entropy)
+    agent.checkpoint_context = {
+        "plan": args.plan,
+        "train_window": list(fold_dates(args, "train")),
+        "indicator_norm": args.indicator_norm,
+        "seed": int(args.seed),
+        "episodes": int(args.episodes),
+        "imitate_episodes": int(args.imitate_episodes),
+        "train_tickers": list(tickers),
+        "holdout": list(holdout),
+        "portfolio": {
+            "rebalance_every": args.rebalance_every,
+            "turnover_penalty": args.turnover_penalty,
+            "beta": args.beta,
+            "alloc_gate": getattr(args, "alloc_gate", None),
+            "alloc_min_k": getattr(args, "alloc_min_k", 0),
+            "alloc_max_k": getattr(args, "alloc_max_k", None),
+        },
+    }
     latest_path = args.out + ".latest"
     start_ep, saved, best_score, resumed = 0, False, None, False
     if args.init and Path(args.init).exists():
@@ -408,7 +457,8 @@ def main():
         resumed = True
         print(f"[portfolio-train] RESUME ep={start_ep}/{args.episodes} best={best_score}")
 
-    train_env = make_env(tickers, args.plan, "train", args)
+    train_env = make_env(tickers, args.plan, "train", args,
+                         indicator_stats=scalers)
 
     # --- Supervised warm-start from the momentum rule ------------------------
     # The fly learns rotation from scratch and captures only a small part of the
@@ -425,7 +475,8 @@ def main():
               f"momentum top-{args.teacher_topk} (lookback {args.teacher_lookback}), "
               f"final CE loss {loss:.4f}")
         post_val = evaluate(agent, tickers, args.plan, "val", args,
-                            n_seeds=1, max_steps=args.max_steps)
+                            n_seeds=1, max_steps=args.max_steps,
+                            indicator_stats=scalers)
         print(f"[portfolio-train] post-imitation val fly={post_val['fly']:.2f}% "
               f"bh={post_val['buyhold']:.2f}% exc={post_val['excess']:+.2f}% "
               f"sharpe={post_val['sharpe']:.2f}")
@@ -438,7 +489,8 @@ def main():
         guard = float(best_score)
     else:
         base = evaluate(agent, tickers, args.plan, "val", args,
-                        n_seeds=1, max_steps=args.max_steps)
+                        n_seeds=1, max_steps=args.max_steps,
+                        indicator_stats=scalers)
         guard = base["buyhold"] if args.guard else -1e9
         print(f"[portfolio-train] val buy&hold={base['buyhold']:.2f}%  "
               f"sharpe={base['sharpe']:.2f}  -> ship threshold={guard:.2f}%")
@@ -455,7 +507,7 @@ def main():
         print(f"[portfolio-train] distilled policy beats the guard -> saved as "
               f"initial best ({best_score:.2f}%)")
 
-    bh_train = run_static_weights(train_env, buy_hold_weights, 1)
+    bh_train = run_buy_and_hold(train_env)
     print(f"[portfolio-train] train-split buy&hold = {bh_train['total_return_pct']:.2f}% "
           f"({train_env.n_steps} steps, {train_env.n_assets} assets)")
 
@@ -490,7 +542,8 @@ def main():
 
         if (ep + 1) % args.eval_every == 0 or ep == args.episodes - 1:
             val = evaluate(agent, tickers, args.plan, "val", args,
-                           n_seeds=args.val_seeds, max_steps=args.max_steps)
+                           n_seeds=args.val_seeds, max_steps=args.max_steps,
+                           indicator_stats=scalers)
             tag = ""
             if val["fly"] > best_score:
                 best_score = val["fly"]
@@ -509,8 +562,15 @@ def main():
 
     if not saved:
         agent.set_policy_state(prior_state)
+        # The fallback is the pre-RL candidate (distilled policy), not a literal
+        # buy & hold policy. Record that so an evaluation cannot mistake this
+        # checkpoint for a validation-selected winner.
+        if isinstance(getattr(agent, "checkpoint_context", None), dict):
+            agent.checkpoint_context["guard_failed"] = True
+            agent.checkpoint_context["guard_threshold"] = float(guard)
         torch.save(agent.get_policy_state(), args.out)
-        print("[portfolio-train] nothing beat buy & hold on validation -> shipping the prior")
+        print("[portfolio-train] nothing beat buy & hold on validation -> "
+              "shipping the pre-RL candidate (guard_failed=True)")
 
     if Path(latest_path).exists():
         try:
@@ -521,7 +581,8 @@ def main():
     if Path(args.out).exists():
         agent.set_policy_state(torch.load(args.out, map_location="cpu", weights_only=False))
     print(f"\n[portfolio-train] TICKER-HOLDOUT test on {len(holdout)} unseen tickers")
-    test = evaluate(agent, holdout, args.plan, "test", args, n_seeds=3)
+    test = evaluate(agent, holdout, args.plan, "test", args, n_seeds=3,
+                    indicator_stats=scalers)
     print(f"  fly={test['fly']:.2f}%  bh={test['buyhold']:.2f}%  "
           f"excess={test['excess']:+.2f}pp  sharpe={test['sharpe']:.2f}  "
           f"maxDD={test['maxdd']:.2f}% (bh {test['bh_maxdd']:.2f}%)  "

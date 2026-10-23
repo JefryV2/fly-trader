@@ -26,16 +26,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 import torch.nn.functional as F
+from shutil import copy2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from config import SPLITS, SERVER_EVAL_SPLIT, SERVER_TRAIN_SPLIT
-from env import FlyTradeEnv
+from config import SPLITS, SPLIT_PLANS, SERVER_EVAL_SPLIT, SERVER_TRAIN_SPLIT
+from env import FlyTradeEnv, fit_indicator_stats
 from fly_brain import FlyBrainAgent
-from strategy import apply_preset, baseline_prob_fn, baseline_probs, compare_on_env, run_episode
+from strategy import (apply_preset, baseline_prob_fn, baseline_probs, compare_on_env,
+                      run_episode, sample_action)
 
 # ── Brain Atlas Data Loader ────────────────────────────────────────────────
 def _load_brain_atlas():
@@ -179,8 +181,8 @@ SERVER_STRATEGY = os.environ.get("FLYBRAIN_STRATEGY", "fly").lower()
 RULE_STRATEGIES = {"trend200", "buy_hold", "momentum"}
 # Pre-specified volatility-targeting overlay for the learned policy (see
 # strategy.vol_target_prob_fn). The level was selected on the *validation* split
-# (0.30) and improves the fly on every held-out window, so it is on by default;
-# set FLYBRAIN_VOL_TARGET=0 to serve the raw learned policy.
+# (0.30); it improves the 2022/2024 windows but costs full-cycle return, so set
+# FLYBRAIN_VOL_TARGET=0 to serve the raw learned policy.
 SERVER_VOL_TARGET = float(os.environ.get("FLYBRAIN_VOL_TARGET", "0.30"))
 # Regime block layout appended to each observation by env._compute_regime_block:
 # [close/SMA200-1, close/SMA50-1, ann_vol20, vol20/vol60].
@@ -188,6 +190,47 @@ REGIME_DIST200_IDX = -4
 REGIME_VOL20_IDX = -2
 # Portfolio block: [exposure_frac, cash_frac, unrealised_pnl_frac, steps/30].
 PORTFOLIO_EXPOSURE_IDX = -8
+
+# Cache the train-only scaler per ticker. Every live/eval/portfolio env reuses
+# it, so a validation/test/live window never normalises features with its own
+# future statistics.
+_INDICATOR_STATS_CACHE = {}
+# Serving scaler window. A new checkpoint carries the window it was trained on;
+# startup replaces this after loading it so live/eval features use the same
+# normalisation as the weights, not a different split's statistics.
+SINGLE_TRAIN_WINDOW = tuple(SPLITS[SERVER_TRAIN_SPLIT])
+
+
+def _train_indicator_stats(ticker: str, start=None, end=None):
+    symbol = str(ticker or "").strip().upper()
+    if start is None or end is None:
+        start, end = SINGLE_TRAIN_WINDOW
+    key = (symbol, str(start), str(end))
+    if key not in _INDICATOR_STATS_CACHE:
+        path = DATA_DIR / f"{symbol}_daily.csv"
+        if not path.is_file():
+            raise ValueError(f"Unknown ticker {ticker!r} (missing {path.name})")
+        try:
+            _INDICATOR_STATS_CACHE[key] = fit_indicator_stats(path, start, end)
+        except AssertionError:
+            # A checkpoint trained before a ticker's history begins (AAPL is
+            # the common case) cannot fit the checkpoint window. Fall back to
+            # the server's train split for that ticker rather than taking the
+            # whole dashboard down; the limitation is documented in README.
+            fallback = tuple(SPLITS[SERVER_TRAIN_SPLIT])
+            if (start, end) == fallback:
+                raise
+            key = (symbol, str(fallback[0]), str(fallback[1]))
+            _INDICATOR_STATS_CACHE[key] = fit_indicator_stats(path, *fallback)
+    return _INDICATOR_STATS_CACHE[key]
+
+
+def _portfolio_indicator_stats(tickers, plan=None):
+    plan = plan or PORTFOLIO_PLAN
+    start, end = SPLIT_PLANS[plan]["train"]
+    return {str(t).strip().upper(): _train_indicator_stats(t, start, end)
+            for t in tickers}
+
 
 def _single_env(ticker: str, budget: float = 100000.0):
     """Build a single-asset live env.
@@ -202,14 +245,17 @@ def _single_env(ticker: str, budget: float = 100000.0):
                        initial_cash=float(budget),
                        start_date=LIVE_WINDOW_START, end_date=LIVE_WINDOW_END,
                        reward_mode=SERVER_REWARD_MODE,
-                       indicator_norm=SERVER_INDICATOR_NORM)
+                       indicator_norm=SERVER_INDICATOR_NORM,
+                       indicator_stats=_train_indicator_stats(ticker))
 
 
 env = _single_env(SESSION["tickers"][0], SESSION["budget"])
 
 CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain.pt"
-BEST_CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain_best.pt"
-BEST_SCORE_PATH = Path(__file__).parent / "checkpoints" / "fly_brain_best_score.json"
+# Dashboard training output. Kept separate from ``CHECKPOINT_PATH``: a short
+# in-sample UI batch is not a validation-selected deployment artifact and must
+# never silently replace the policy that startup serves.
+LIVE_CHECKPOINT_PATH = Path(__file__).parent / "checkpoints" / "fly_brain_live.pt"
 SIMULATION_HISTORY_PATH = Path(__file__).parent / "checkpoints" / "simulation_history.json"
 CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -235,35 +281,50 @@ brain.target_entropy = float(os.environ.get("FLYBRAIN_TARGET_ENTROPY", "0.5"))
 # $140k into $102k. Override with FLYBRAIN_ACTION_FLOOR.
 brain.action_floor = float(os.environ.get("FLYBRAIN_ACTION_FLOOR", "0.0"))
 
+LOADED_CHECKPOINT_INFO = {"path": None, "meta": {}, "legacy": True}
 chosen_cp = None
-for candidate in [BEST_CHECKPOINT_PATH, CHECKPOINT_PATH]:
-    if candidate.exists():
-        try:
-            data = torch.load(candidate, map_location="cpu", weights_only=False)
-            if 'simulator_state' in data:
-                chosen_cp = (candidate, data)
-                break
-            elif chosen_cp is None:
-                chosen_cp = (candidate, data)
-        except Exception as e:
-            print(f"Warning loading {candidate}: {e}")
+# Prefer the named deployment checkpoint written by train.py (validation
+# selected) over the old server-side "best Sharpe" file. The latter used to be
+# produced by live/in-sample dashboard runs and is no longer a selection signal.
+if CHECKPOINT_PATH.exists():
+    try:
+        data = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+        chosen_cp = (CHECKPOINT_PATH, data)
+    except Exception as e:
+        print(f"Warning loading {CHECKPOINT_PATH}: {e}")
 
 if chosen_cp:
     cp_path_used, cp_data = chosen_cp
     brain.set_policy_state(cp_data)
+    cp_meta = cp_data.get("meta", {}) if isinstance(cp_data, dict) else {}
+    LOADED_CHECKPOINT_INFO = {
+        "path": cp_path_used.name,
+        "meta": cp_meta,
+        "legacy": not bool(cp_meta),
+        "has_simulator_state": isinstance(cp_data, dict) and "simulator_state" in cp_data,
+    }
     print(f"Loaded checkpoint from {cp_path_used.name} (has simulator_state: {'simulator_state' in cp_data})")
+    if not cp_meta:
+        print("Warning: legacy checkpoint has no architecture/preprocessing metadata; "
+              "this server uses train-only indicator scaling, so retrain before "
+              "comparing its numbers with historical reports.")
+    else:
+        cp_window = cp_meta.get("train_window")
+        if cp_window and len(cp_window) == 2 and tuple(cp_window) != SINGLE_TRAIN_WINDOW:
+            SINGLE_TRAIN_WINDOW = tuple(cp_window)
+            _INDICATOR_STATS_CACHE.clear()
+            env = _single_env(SESSION["tickers"][0], SESSION["budget"])
+            print(f"Aligned serving scaler to checkpoint train window {SINGLE_TRAIN_WINDOW}")
 
 # Policy health check: if actor head is saturated (Buy == 0.0), restore smart prior weights
 dummy_obs = env._get_observation(0)
 _, test_probs, _, _ = brain.select_action(dummy_obs, deterministic=False)
 if sum(test_probs[1:4]) < 0.01:
-    print("Warning: Actor head was saturated. Applying smart prior weights to restore proactive trading.")
+    print("Warning: Actor head was saturated. Applying smart prior weights in memory "
+          "for this session only; checkpoints are written only by explicit training.")
     brain._init_smart_weights()
-    try:
-        torch.save(brain.get_policy_state(), CHECKPOINT_PATH)
-        torch.save(brain.get_policy_state(), BEST_CHECKPOINT_PATH)
-    except Exception as e:
-        print(f"Warning saving repaired checkpoint: {e}")
+    # Do not silently overwrite the deployment checkpoint here. A startup
+    # health check must be read-only with respect to model files.
 
 obs, _ = env.reset()
 _history = [env.initial_cash]
@@ -289,21 +350,6 @@ def _save_simulation_history():
     except Exception as e:
         print(f"Warning saving simulation history: {e}")
 _last_shaped_reward = 0.0
-_best_score = -999.0  # Track best Sharpe ratio for checkpoint saving
-_patience_counter = 0  # Early stopping patience
-
-# Seed the best-Sharpe tracker from disk. Without this it starts at -999, so the
-# very first /train_batch episode always counts as a new record and overwrites
-# the shipped fly_brain_best.pt with an in-sample (and often worse) policy — i.e.
-# clicking "Train" once destroyed the deployed brain. Now training only replaces
-# the best checkpoint when it genuinely beats the recorded score.
-if BEST_SCORE_PATH.exists():
-    try:
-        with open(BEST_SCORE_PATH, "r") as _f:
-            _best_score = float(json.load(_f).get("best_score", _best_score))
-        print(f"Seeded best-Sharpe tracker from {BEST_SCORE_PATH.name}: {_best_score:.4f}")
-    except Exception as _e:
-        print(f"Warning loading best score: {_e}")
 class RewardNormalizer:
     """Welford running mean and variance normalizer with safe standard deviation and clipping."""
     def __init__(self):
@@ -390,41 +436,12 @@ def _apply_vol_target(probs, obs, shares):
 
 
 def _save_checkpoint():
+    """Persist the dashboard policy without touching the deployment checkpoint."""
     try:
-        torch.save(brain.get_policy_state(), CHECKPOINT_PATH)
+        torch.save(brain.get_policy_state(), LIVE_CHECKPOINT_PATH)
     except Exception as e:
-        print(f"Warning: failed to save checkpoint: {e}")
+        print(f"Warning: failed to save live checkpoint: {e}")
 
-
-def _save_best_checkpoint(score: float):
-    """Save best checkpoint based on Sharpe ratio."""
-    global _best_score, _patience_counter
-    if score > _best_score:
-        _best_score = score
-        _patience_counter = 0
-        try:
-            torch.save(brain.get_policy_state(), BEST_CHECKPOINT_PATH)
-            with open(BEST_SCORE_PATH, 'w') as f:
-                json.dump({'best_score': score, 'total_episodes': _total_episodes_trained}, f)
-            print(f"  New best model saved: Sharpe={score:.4f}")
-        except Exception as e:
-            print(f"Warning: failed to save best checkpoint: {e}")
-    else:
-        _patience_counter += 1
-
-
-def _load_best_checkpoint():
-    """Load best checkpoint if available."""
-    global _best_score
-    if BEST_CHECKPOINT_PATH.exists() and BEST_SCORE_PATH.exists():
-        try:
-            brain.set_policy_state(torch.load(BEST_CHECKPOINT_PATH, map_location="cpu", weights_only=False))
-            with open(BEST_SCORE_PATH, 'r') as f:
-                score_data = json.load(f)
-                _best_score = score_data.get('best_score', -999.0)
-            print(f"Loaded best checkpoint (Sharpe={_best_score:.4f})")
-        except Exception as e:
-            print(f"Warning: failed to load best checkpoint: {e}")
 
 def _compute_sharpe(values):
     if len(values) < 2:
@@ -445,8 +462,19 @@ DATA_DIR = DATA_PATH.parent
 
 
 def _data_path_for(ticker: str) -> Path:
-    p = DATA_DIR / f"{ticker}_daily.csv"
-    return p if p.is_file() else DATA_PATH
+    """Resolve a ticker to its CSV, or fail loudly.
+
+    Falling back to AAPL made a typo or lowercase/unknown symbol silently
+    evaluate the wrong asset. API requests should get a clear 404 instead.
+    """
+    symbol = str(ticker or "").strip().upper()
+    p = DATA_DIR / f"{symbol}_daily.csv"
+    if not p.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No daily data for ticker '{ticker}'. Expected {p.name} in {DATA_DIR}.",
+        )
+    return p
 
 
 def _split_bounds(split: str):
@@ -464,6 +492,7 @@ def _make_env(ticker: str, split: str, *, enable_sl_tp: bool, window_size: int =
         enable_sl_tp=enable_sl_tp, start_date=start, end_date=end,
         reward_mode=reward_mode or SERVER_REWARD_MODE,
         indicator_norm=indicator_norm or SERVER_INDICATOR_NORM,
+        indicator_stats=_train_indicator_stats(ticker),
     )
 
 
@@ -522,6 +551,54 @@ def _heldout_report(tickers, split: str, *, seed: int = 0) -> dict:
     report["fly_excess_vs_buyhold_pct"] = round(
         report["mean_fly_return_pct"] - report["mean_buyhold_return_pct"], 2)
     return report
+
+
+def _agent_from_state(state: dict) -> FlyBrainAgent:
+    """Build a private agent for a checkpoint without touching the live brain."""
+    meta = state.get("meta", {}) if isinstance(state, dict) else {}
+    agent = FlyBrainAgent(
+        obs_dim=int(meta.get("obs_dim", getattr(brain, "obs_dim", 398))),
+        use_connectome=USE_CONNECTOME,
+        N_NEURONS=int(meta.get("n_neurons", getattr(brain, "N_NEURONS", 1024))),
+        use_xsection=bool(meta.get("use_xsection", getattr(brain, "use_xsection", False))),
+        use_full_readout=bool(meta.get("use_full_readout", getattr(brain, "use_full_readout", False))),
+        full_readout_proj=int(meta.get("full_readout_proj", 8)),
+        memory_rho=float(meta.get("memory_rho", 0.0)),
+    )
+    agent.set_policy_state(state)
+    agent.eval()
+    return agent
+
+
+def _validation_stats(agent: FlyBrainAgent) -> dict:
+    """Mean fly and buy & hold returns on the validation split only."""
+    fly, bh, per_ticker = [], [], {}
+    for t in MULTI_ASSET_TICKERS:
+        try:
+            res = compare_on_env(
+                lambda t=t: _make_env(t, "val", enable_sl_tp=False),
+                agent,
+                deterministic=True,
+                seed=0,
+                include_legacy=False,
+                include_baselines=True,
+            )
+        except Exception as exc:
+            per_ticker[t] = {"error": str(exc)}
+            continue
+        f = float(res["fly_honest"]["total_return_pct"])
+        b = float(res["buy_hold"]["total_return_pct"])
+        fly.append(f)
+        bh.append(b)
+        per_ticker[t] = {"fly": round(f, 2), "buyhold": round(b, 2)}
+    if not fly:
+        raise HTTPException(500, "Validation evaluation produced no usable tickers")
+    return {
+        "mean_fly_return_pct": round(float(np.mean(fly)), 2),
+        "mean_buyhold_return_pct": round(float(np.mean(bh)), 2),
+        "excess_pct": round(float(np.mean(fly) - np.mean(bh)), 2),
+        "per_ticker": per_ticker,
+    }
 
 
 def _get_region_breakdown(spikes_1024, N_NEURONS=1024):
@@ -593,7 +670,8 @@ def _portfolio_live_env(tickers):
         kw["alloc_topk"] = PORTFOLIO_MIN_K
     elif PORTFOLIO_GATE != "none":
         kw["alloc_gate"] = PORTFOLIO_GATE
-    return PortfolioEnv(list(tickers), **kw)
+    return PortfolioEnv(list(tickers), indicator_stats=_portfolio_indicator_stats(tickers),
+                        **kw)
 
 
 def _live_portfolio():
@@ -726,6 +804,38 @@ def _run_portfolio_step(explore: bool = False):
     }
 
 
+_POLICY_BASELINES = {
+    "momentum": "momentum",
+    "mean-revert": "mean_revert",
+    "mean_revert": "mean_revert",
+    "random": "random",
+}
+
+
+def _policy_action(policy: str) -> int:
+    """Resolve a dashboard baseline chip to a real server-side action.
+
+    The portfolio path ignores per-asset chips and uses the shared allocator.
+    Unknown names fall back to the Fly Brain.
+    """
+    name = _POLICY_BASELINES.get(str(policy or "").strip().lower())
+    if name is None or len(SESSION["tickers"]) > 1:
+        return -1
+    idx = min(env.current_step + env.window_size - 1, len(env.data) - 1)
+    price = _safe_float(env.data.iloc[idx]["Close"])
+    probs = baseline_probs(
+        name, obs, shares=env.shares, cash=env.cash, prev_action=0,
+    )
+    probs = apply_preset(
+        probs, "honest",
+        shares=env.shares, cash=env.cash,
+        price=price, entry_price=getattr(env, "entry_price", 0.0),
+    ).astype(np.float64)
+    if probs.sum() <= 1e-9:
+        return 0
+    return sample_action(probs, deterministic=False, temperature=0.65)
+
+
 def _dispatch_step(action: int, auto_brain: bool = False,
                    enable_learning: bool = True, explore: bool = False):
     if len(SESSION["tickers"]) > 1:
@@ -734,19 +844,14 @@ def _dispatch_step(action: int, auto_brain: bool = False,
 
 
 def _run_step(action: int, auto_brain: bool = False, enable_learning: bool = True):
-    global obs, _history, _trades, _last_shaped_reward, _best_score, _patience_counter, _reward_mean, _reward_std, _reward_count
+    global obs, _history, _trades, _last_shaped_reward, _reward_mean, _reward_std, _reward_count
 
     # Auto-reset episode if completed
     if env.current_step >= env.n_steps:
-        _save_checkpoint()
-        # Save best model based on Sharpe ratio
-        current_sharpe = _compute_sharpe(_history)
-        _save_best_checkpoint(current_sharpe)
-        
-        # Early stopping if patience exceeded
-        if _patience_counter > 50:
-            print(f"Early stopping: no improvement for {_patience_counter} episodes")
-        
+        # Live stepping is an interactive session, not a model-selection run.
+        # In particular, a single live AAPL episode must never overwrite the
+        # deployed checkpoint based on an in-sample Sharpe. Training/eval
+        # endpoints own persistence.
         obs, _ = env.reset()
         brain.reset()
         _history = [env.initial_cash]
@@ -937,7 +1042,7 @@ def ping():
 
 @app.get("/reset")
 def reset():
-    global obs, _history, _trades, _last_shaped_reward, _patience_counter, _reward_mean, _reward_std, _reward_count
+    global obs, _history, _trades, _last_shaped_reward, _reward_mean, _reward_std, _reward_count
     if len(SESSION["tickers"]) > 1:
         _reset_live_portfolio()
         p_env, _ = _live_portfolio()
@@ -951,7 +1056,6 @@ def reset():
     _history = [env.initial_cash]
     _trades.clear()
     _last_shaped_reward = 0.0
-    _patience_counter = 0
     _reward_mean = 0.0
     _reward_std = 1.0
     _reward_count = 0
@@ -963,15 +1067,25 @@ def reset():
 
 class ActionPayload(BaseModel):
     action: int = -1
-    policy: str = "brain"   # "brain", "momentum", "mean_revert", "manual"
+    policy: str = "brain"   # "brain", "momentum", "mean-revert"/"mean_revert", "random"
     learning: bool = False  # Disable online learning by default to prevent policy collapse
     explore: bool = False   # Portfolio: sample instead of argmax (runs then differ)
 
 @app.post("/step")
 def take_step(payload: ActionPayload):
-    auto_brain = (payload.action == -1)
-    return _dispatch_step(payload.action, auto_brain=auto_brain,
-                          enable_learning=payload.learning,
+    action = int(payload.action)
+    # Manual buttons send an explicit action and always win. With no explicit
+    # action, baseline chips are resolved here rather than approximated in the
+    # browser, so the dashboard and offline baselines use one implementation.
+    if action == -1:
+        action = _policy_action(payload.policy)
+    auto_brain = (action == -1)
+    # Baselines and manual trades are not the policy's own on-policy data; never
+    # let them silently update the deployed brain. Portfolio mode has its own
+    # training path.
+    enable_learning = bool(payload.learning and auto_brain)
+    return _dispatch_step(action, auto_brain=auto_brain,
+                          enable_learning=enable_learning,
                           explore=payload.explore)
 
 
@@ -1096,6 +1210,12 @@ def train_batch(payload: TrainBatchPayload):
     losses = []
     split = payload.split
     _split_bounds(split)  # validate early (raises 400 on bad split)
+    if split != SERVER_TRAIN_SPLIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"training is only allowed on the '{SERVER_TRAIN_SPLIT}' split; "
+                    f"'{split}' is reserved for validation/test evaluation"),
+        )
 
     for ep in range(n_episodes):
         # NB: the reward normaliser persists across episodes on purpose; a
@@ -1205,9 +1325,10 @@ def train_batch(payload: TrainBatchPayload):
         ep_winrate = round(ep_wins / max(1, step_count) * 100, 1)
         ep_sharpe = _compute_sharpe(ep_history)
 
-        # Automatically preserve best checkpoint when performance improves
-        if ep_sharpe > _best_score and ep_ret > 0:
-            _save_best_checkpoint(ep_sharpe)
+        # Do not promote a checkpoint from in-sample train Sharpe. Deployment
+        # selection belongs to the validation-based offline trainers (or a
+        # future explicit validation endpoint), not to a 25-episode dashboard
+        # run.
 
         returns.append(ep_ret)
         ep_start = str(train_env.data.index.min().date())
@@ -1258,10 +1379,9 @@ def train_batch(payload: TrainBatchPayload):
     # episodes, and it is measured over the same window for every ticker.
     heldout = _heldout_report(HELDOUT_TICKERS, SERVER_EVAL_SPLIT, seed=0)
 
-    # Save latest checkpoint
+    # Persist the latest policy to the dashboard-only sidecar. The deployment
+    # checkpoint is owned by the validation-based offline trainers.
     _save_checkpoint()
-    # If a best checkpoint exists, activate it
-    _load_best_checkpoint()
 
     # --- Record this simulation run in the persistent history log ---
     run_record = {
@@ -1313,7 +1433,69 @@ def train_batch(payload: TrainBatchPayload):
         "episodes_data": episodes_data,
         "plasticity": run_record["plasticity"],
         "valence_evolution": run_record["valence_evolution"],
+        "checkpoint_saved": LIVE_CHECKPOINT_PATH.name,
+        "deployment_checkpoint": CHECKPOINT_PATH.name,
+        "validation_promoted": False,
     }
+
+@app.post("/promote")
+def promote_live_checkpoint():
+    """Promote the dashboard sidecar only when it wins on validation.
+
+    This is deliberately separate from `/train_batch`: a short in-sample batch
+    must not become the deployed policy just because it ran. The candidate and
+    the current deployment are evaluated on the same validation split; the
+    candidate must beat both the deployment and buy & hold there. Test data is
+    never touched.
+    """
+    global LOADED_CHECKPOINT_INFO
+    if not LIVE_CHECKPOINT_PATH.is_file():
+        raise HTTPException(400, f"No dashboard checkpoint at {LIVE_CHECKPOINT_PATH.name}")
+    if not CHECKPOINT_PATH.is_file():
+        raise HTTPException(400, f"No deployment checkpoint at {CHECKPOINT_PATH.name}")
+    try:
+        live_state = torch.load(LIVE_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+        dep_state = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not load checkpoints: {exc}")
+
+    try:
+        candidate = _agent_from_state(live_state)
+        deployment = _agent_from_state(dep_state)
+    except Exception as exc:
+        raise HTTPException(400, f"Checkpoint architecture mismatch: {exc}")
+    cand_stats = _validation_stats(candidate)
+    dep_stats = _validation_stats(deployment)
+
+    promoted = (cand_stats["mean_fly_return_pct"] > dep_stats["mean_fly_return_pct"]
+                and cand_stats["mean_fly_return_pct"] > cand_stats["mean_buyhold_return_pct"])
+    backup = None
+    if promoted:
+        backup = CHECKPOINT_PATH.with_name(CHECKPOINT_PATH.stem + ".pre_promote.pt")
+        copy2(CHECKPOINT_PATH, backup)
+        copy2(LIVE_CHECKPOINT_PATH, CHECKPOINT_PATH)
+        meta = live_state.get("meta", {}) if isinstance(live_state, dict) else {}
+        LOADED_CHECKPOINT_INFO = {
+            "path": CHECKPOINT_PATH.name,
+            "meta": meta,
+            "legacy": not bool(meta),
+            "has_simulator_state": isinstance(live_state, dict) and "simulator_state" in live_state,
+        }
+        try:
+            brain.set_policy_state(live_state)
+        except Exception as exc:
+            print(f"Warning: promoted on disk but live brain reload failed: {exc}")
+
+    return {
+        "promoted": promoted,
+        "validation_split": "val",
+        "candidate": cand_stats,
+        "deployment": dep_stats,
+        "deployment_checkpoint": CHECKPOINT_PATH.name,
+        "live_checkpoint": LIVE_CHECKPOINT_PATH.name,
+        "backup": backup.name if backup else None,
+    }
+
 
 class EvalEpisodePayload(BaseModel):
     ticker: str = "AAPL"
@@ -1347,13 +1529,17 @@ def eval_episode(payload: EvalEpisodePayload):
     shaped_reward = 0.0
 
     while not done and step_count < eval_env.n_steps:
-        _, raw_probs, val, spikes = brain.select_action(cur_obs, reward=shaped_reward, deterministic=False)
-        # Shared masking path (config.MASK_PRESETS['eval']); see strategy.py.
+        _, raw_probs, val, spikes = brain.select_action(
+            cur_obs, reward=shaped_reward, deterministic=payload.deterministic)
+        # Use the same honest mask + overlays as live serving and the offline
+        # backtest. The old "eval" preset injected hand-coded buy pressure that
+        # the headline numbers did not include.
         p_arr = apply_preset(
-            raw_probs, "eval",
+            raw_probs, "honest",
             shares=eval_env.shares, cash=eval_env.cash,
             entry_price=getattr(eval_env, "entry_price", 0.0),
         ).astype(np.float32)
+        p_arr = _apply_vol_target(p_arr, cur_obs, eval_env.shares)
         p_arr = _apply_regime_gate(p_arr, cur_obs, eval_env.shares)
 
         if payload.deterministic:
@@ -1361,10 +1547,19 @@ def eval_episode(payload: EvalEpisodePayload):
         else:
             action = int(np.random.choice(7, p=p_arr))
 
+        # Match live serving: trade the policy's expected continuous commitment
+        # rather than snapping to the 25/50/100 bucket.
+        size_override = None
+        if SESSION["dynamic_sizing"] and 1 <= action <= 6:
+            size_override = _continuous_size(p_arr, action)
+            if size_override <= 5e-4:
+                action, size_override = 0, None
+
         actions_taken[action] += 1
         price = float(eval_env.data.iloc[min(eval_env.current_step + eval_env.window_size - 1, len(eval_env.data) - 1)]["Close"])
 
-        next_obs, rew, done, truncated, info = eval_env.step(action)
+        next_obs, rew, done, truncated, info = eval_env.step(
+            action, size_override=size_override)
         pv = float(info["portfolio_value"])
         portfolio_history.append(pv)
         total_reward += rew
@@ -1398,8 +1593,15 @@ def eval_episode(payload: EvalEpisodePayload):
     final = float(portfolio_history[-1])
     ret_pct = round((final - initial) / initial * 100, 2)
     sharpe = _compute_sharpe(portfolio_history)
-    max_pv = max(portfolio_history)
-    max_dd = round((max_pv - min(portfolio_history)) / max_pv * 100, 2) if max_pv > 0 else 0.0
+    # Running-peak drawdown: the old formula used the global minimum, which
+    # overstated drawdown whenever the low happened before a later high.
+    peak = float(portfolio_history[0])
+    max_dd_frac = 0.0
+    for value in portfolio_history:
+        peak = max(peak, float(value))
+        if peak > 0:
+            max_dd_frac = max(max_dd_frac, (peak - float(value)) / peak)
+    max_dd = round(max_dd_frac * 100.0, 2)
     wins = sum(1 for i in range(1, len(portfolio_history)) if portfolio_history[i] > portfolio_history[i-1])
     win_rate = round(wins / max(1, len(portfolio_history) - 1) * 100, 1)
 
@@ -1444,13 +1646,44 @@ def brain_status():
 
 @app.get("/info")
 def get_info():
+    tickers = list(SESSION["tickers"])
     return {
-        "ticker":       "AAPL",
+        "ticker":       tickers[0] if len(tickers) == 1 else None,
+        "tickers":      tickers,
+        "mode":         "single" if len(tickers) == 1 else "portfolio",
         "total_steps":  env.n_steps,
         "window_size":  env.window_size,
         "initial_cash": env.initial_cash,
         "current_step": env.current_step,
     }
+
+@app.get("/health")
+def health():
+    """Cheap liveness probe; intentionally does not touch model or env state."""
+    tickers = list(SESSION["tickers"])
+    return {"status": "ok",
+            "mode": "single" if len(tickers) == 1 else "portfolio",
+            "tickers": tickers}
+
+
+@app.get("/checkpoint_info")
+def checkpoint_info():
+    """Read-only view of the deployed checkpoints and their architecture metadata."""
+    portfolio = {"path": PORTFOLIO_CKPT.name, "available": PORTFOLIO_CKPT.is_file()}
+    if PORTFOLIO_CKPT.is_file():
+        try:
+            data = torch.load(PORTFOLIO_CKPT, map_location="cpu", weights_only=False)
+            meta = data.get("meta", {}) if isinstance(data, dict) else {}
+            portfolio.update({"meta": meta, "legacy": not bool(meta)})
+        except Exception as exc:
+            portfolio["error"] = str(exc)
+    single = dict(LOADED_CHECKPOINT_INFO)
+    single["serving_train_window"] = list(SINGLE_TRAIN_WINDOW)
+    return {"single": single,
+            "portfolio": portfolio,
+            "live": {"path": LIVE_CHECKPOINT_PATH.name,
+                     "available": LIVE_CHECKPOINT_PATH.is_file()}}
+
 
 @app.get("/learning_history")
 def learning_history():
@@ -1582,7 +1815,8 @@ def _build_portfolio_env():
         kw["alloc_topk"] = PORTFOLIO_MIN_K
     elif PORTFOLIO_GATE != "none":
         kw["alloc_gate"] = PORTFOLIO_GATE
-    return PortfolioEnv(_portfolio_tickers(), **kw)
+    tickers = _portfolio_tickers()
+    return PortfolioEnv(tickers, indicator_stats=_portfolio_indicator_stats(tickers), **kw)
 
 
 def _load_portfolio_agent(obs_dim: int):
@@ -1723,12 +1957,13 @@ def _combo_env(tickers, split):
         kw["alloc_topk"] = PORTFOLIO_MIN_K
     elif PORTFOLIO_GATE != "none":
         kw["alloc_gate"] = PORTFOLIO_GATE
-    return PortfolioEnv(list(tickers), **kw)
+    return PortfolioEnv(list(tickers), indicator_stats=_portfolio_indicator_stats(tickers),
+                        **kw)
 
 
 def _combo_rollout(combo, split, agent):
     """One deterministic fly rollout plus the same basket's buy & hold."""
-    from portfolio_env import buy_hold_weights, run_static_weights
+    from portfolio_env import run_buy_and_hold
     env = _combo_env(combo, split)
     env.reset()
     done = False
@@ -1737,7 +1972,7 @@ def _combo_rollout(combo, split, agent):
             env.observe(), deterministic=True)
         _, _, done, _ = env.step(np.asarray(actions, dtype=int))
     fly = env.metrics()
-    bh = run_static_weights(env, buy_hold_weights, 1)
+    bh = run_buy_and_hold(env)
     decisions = max(1, len(env.history) - 1)
     return {
         "combo": list(combo),
@@ -2060,7 +2295,7 @@ def portfolio_eval(refresh: bool = False):
                        f"--out {PORTFOLIO_CKPT}"),
         }
 
-    from portfolio_env import (buy_hold_weights, momentum_weights,
+    from portfolio_env import (momentum_weights, run_buy_and_hold,
                                trend200_weights)
 
     env = _build_portfolio_env()
@@ -2088,7 +2323,10 @@ def portfolio_eval(refresh: bool = False):
 
     strategies = {
         "fly": rollout(fly),
-        "buy&hold": rollout(rule(lambda e, i: buy_hold_weights(e))),
+        # Enter equal weight once, then let the book drift. The old baseline
+        # recomputed equal weights every decision, i.e. it was a monthly
+        # rebalanced portfolio mislabeled as buy & hold.
+        "buy&hold": run_buy_and_hold(env),
         "trend200": rollout(rule(trend200_weights)),
         "mom120-top3-m": rollout(rule(lambda e, i: momentum_weights(e, i, 120, 3))),
     }

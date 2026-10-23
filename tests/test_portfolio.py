@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 
 from portfolio_env import (DESIRES, PortfolioEnv, buy_hold_weights,
-                           momentum_weights, run_static_weights, trend200_weights)
+                           momentum_weights, run_buy_and_hold,
+                           run_static_weights, trend200_weights)
 
 TICKERS = ["AAPL", "TSLA", "MSFT"]
 WINDOW = {"start_date": "2022-01-01", "end_date": "2022-12-31"}
@@ -212,12 +213,32 @@ def test_turnover_penalty_is_charged_to_the_reward():
     assert rb.sum() < ra.sum()
 
 
-def test_buy_hold_baseline_is_equal_weight_and_low_turnover():
+def test_static_equal_weight_baseline_rebalances_price_drift():
+    # A constant-weight rule is a *rebalanced* portfolio, not buy & hold:
+    # relative price moves create drift that must be traded back every decision.
     env = make()
     m = run_static_weights(env, buy_hold_weights, 1)
-    assert m["n_trades"] == env.n_assets          # one entry trade per asset
-    assert m["turnover"] == pytest.approx(1.0, abs=1e-6)
+    assert m["n_trades"] > env.n_assets
+    assert m["turnover"] > 1.0
     assert m["total_return_pct"] != 0.0
+
+
+def test_true_buy_hold_enters_once_and_never_rebalances():
+    env = make()
+    start_bar = env._bar(0)
+    end_bar = env._bar(env.n_steps)
+    p0 = np.array([env._price(a, start_bar) for a in range(env.n_assets)])
+    p1 = np.array([env._price(a, end_bar) for a in range(env.n_assets)])
+    expected = (float(np.mean(p1 / p0)) * (1.0 - env.transaction_cost) - 1.0) * 100.0
+
+    m = run_buy_and_hold(env)
+    assert m["n_trades"] == env.n_assets          # only the initial entry
+    assert m["turnover"] == pytest.approx(1.0, abs=1e-6)
+    assert len(m["equity"]) == len(env.history)
+    assert m["equity"][-1] == pytest.approx(m["equity"][0] * (1.0 + m["total_return_pct"] / 100.0))
+    # No rebalancing: the terminal book is the price-drifted one, not 1/n.
+    assert m["total_return_pct"] == pytest.approx(expected, abs=0.6)
+    assert not np.allclose(env.weights, np.full(env.n_assets, 1.0 / env.n_assets), atol=1e-4)
 
 
 def test_allocation_actually_rotates():

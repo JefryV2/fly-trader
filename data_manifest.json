@@ -1,0 +1,4704 @@
+{
+  "generated_at_utc": "2026-10-22T14:32:29+00:00",
+  "data_dir": "data",
+  "files": [
+    {
+      "ticker": "AAPL",
+      "file": "AAPL_daily.csv",
+      "bytes": 72052,
+      "sha256": "329752df46daf063b24a2fa88f30d11b605fa8a8fe1da5b4c74a37a559279af7",
+      "rows": 755,
+      "columns": [
+        "Price",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2022-01-03",
+      "last_date": "2024-12-31",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 375,
+            "first": "2022-01-03",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "val": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "val": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "test": {
+            "rows": 753,
+            "first": "2022-01-03",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "val": {
+            "rows": 0,
+            "first": null,
+            "last": null
+          },
+          "test": {
+            "rows": 753,
+            "first": "2022-01-03",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "ABBV",
+      "file": "ABBV_daily.csv",
+      "bytes": 257894,
+      "sha256": "a9ded48f34e68e0c537b96f6f394fd73fc826e4d6186a18c1b7066b050d4a4cf",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "ADBE",
+      "file": "ADBE_daily.csv",
+      "bytes": 244171,
+      "sha256": "13a03341770f678331c7975fb32ecbc6506238605f139e96552fa9a89d1274dc",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "AMD",
+      "file": "AMD_daily.csv",
+      "bytes": 254499,
+      "sha256": "7a4cda0065aeba1504dd5249d72b26bdc96a8886840e2ec2982ded43ed006884",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "AMGN",
+      "file": "AMGN_daily.csv",
+      "bytes": 261202,
+      "sha256": "f9d4d7848184e40925e10e6a8f123eb31bcf440d3d752fdb54ae5e66334bf323",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "AMZN",
+      "file": "AMZN_daily.csv",
+      "bytes": 254004,
+      "sha256": "c102534cef6f1eab8c73679910e3c719a162875ffa9ea36b71162497c077e7d8",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "AXP",
+      "file": "AXP_daily.csv",
+      "bytes": 257730,
+      "sha256": "df3e45233050e1e700e139a3929e732a8fc8fbd1a24f817b0b136418ca98cfb7",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "BA",
+      "file": "BA_daily.csv",
+      "bytes": 254062,
+      "sha256": "61bc5d79872b981afabb8b8e64c42c6167a43b64c55ad885848db4e303e26492",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "BAC",
+      "file": "BAC_daily.csv",
+      "bytes": 263163,
+      "sha256": "3d871892678bc574c54704593510b56c014e49231c732f7723d1060f72dbfbab",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "BMY",
+      "file": "BMY_daily.csv",
+      "bytes": 257953,
+      "sha256": "a4a5cf346e09c13aa207fc2805b2101a55b953e55d3b6087c42b1fc21addc183",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "C",
+      "file": "C_daily.csv",
+      "bytes": 259051,
+      "sha256": "c4797d154f050b6f8a690825a31135cedb386e1a150b581f3bc3a6c1ca2a0096",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "CAT",
+      "file": "CAT_daily.csv",
+      "bytes": 259251,
+      "sha256": "03165423fe934d67f0b4a536e1c15b9fff695ab8947e42d65e0304bf70b5d504",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "COP",
+      "file": "COP_daily.csv",
+      "bytes": 257585,
+      "sha256": "d614f82f88fba0b9cfbd7de8d395405b8b868fd3f3851948ce785d9ed038ce19",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "COST",
+      "file": "COST_daily.csv",
+      "bytes": 257997,
+      "sha256": "357d0135f3b1853017cf47fe37099de58d2bc66c38f5827fc3dd4a44f54b0d79",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "CRM",
+      "file": "CRM_daily.csv",
+      "bytes": 259068,
+      "sha256": "77050dbebc3cd59f3d765751631c71f794345b2addf9e5b3f14d117c9c1c4c7a",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "CSCO",
+      "file": "CSCO_daily.csv",
+      "bytes": 260392,
+      "sha256": "95a9a3bcb40e9d1772928f259e60dff25cf5fa51d6713dc3b8b42ea42e4c65d1",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "CVX",
+      "file": "CVX_daily.csv",
+      "bytes": 256925,
+      "sha256": "956eacc537587716dd09a275476636743902c41a8181803008f46b5b004577d9",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "DIS",
+      "file": "DIS_daily.csv",
+      "bytes": 259274,
+      "sha256": "3476ca947bfe30015f0454a786f29c9cb0ca804a33a1b63c8437c8519db4f2ad",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "GE",
+      "file": "GE_daily.csv",
+      "bytes": 259383,
+      "sha256": "81eac6f33590bd44fbbe2b999f8884a978a23dbe13b50a360db0d6799c87c638",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "GOOGL",
+      "file": "GOOGL_daily.csv",
+      "bytes": 261255,
+      "sha256": "5964b924e49b91fd4fbfc93eeb9af83c70a5db91ee5960b9e10804c203b5566e",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "GS",
+      "file": "GS_daily.csv",
+      "bytes": 259183,
+      "sha256": "07b622fddb8fc60a3cf511a39c0274b0c76a94c791b31368f36b05b3a39dd66f",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "HD",
+      "file": "HD_daily.csv",
+      "bytes": 259150,
+      "sha256": "a5d3d4a88fe9adc3f6ebf774755870cba5fbbe9a2a895f74973dbf3fc43571de",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "HON",
+      "file": "HON_daily.csv",
+      "bytes": 259883,
+      "sha256": "f0c0949e1d1f0a9b834b7e39b389c2f443367266015b3bc5c1b092c67c0688c3",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "IBM",
+      "file": "IBM_daily.csv",
+      "bytes": 258365,
+      "sha256": "d8441183baacf5dcde0e992704b4c082ec6c8a9a7150a4066392da716f33ef62",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "INTC",
+      "file": "INTC_daily.csv",
+      "bytes": 260529,
+      "sha256": "706f821645651d76706e5ed70ecd8812ab15696f86150485678ba6870ee61c39",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "JNJ",
+      "file": "JNJ_daily.csv",
+      "bytes": 260182,
+      "sha256": "f6c188354ebec75726e4e592c32f26ccf1b92f576d097f25ea93f25230d5ce22",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "JPM",
+      "file": "JPM_daily.csv",
+      "bytes": 259555,
+      "sha256": "5165515c950007c89fc6c7a9e9d86ed1924389b518f29a7719d9e2cd63790b36",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "KO",
+      "file": "KO_daily.csv",
+      "bytes": 259299,
+      "sha256": "f704a44bde3ee283600f31235eee55baad5ba23ee6cdd33d4a5c42b934bd2814",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "LIN",
+      "file": "LIN_daily.csv",
+      "bytes": 258360,
+      "sha256": "a6b963a35e933710f3e88f9b91a6126f2f1f116ce2f77fd689e4b9d0684f4762",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "LLY",
+      "file": "LLY_daily.csv",
+      "bytes": 256297,
+      "sha256": "4fe766e9bdd064e8927aff05eb8fcd2a97532822e786cba5e0de5a25ca97e8de",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "MA",
+      "file": "MA_daily.csv",
+      "bytes": 257145,
+      "sha256": "65df58251cc93180288a2be34ff256bd469e5ab96f3ab2c192c662463c53a4b1",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "MCD",
+      "file": "MCD_daily.csv",
+      "bytes": 259023,
+      "sha256": "a9a2354aef56ff6a607b2fc9ea4a5bb4cc4268420266363a6657d71ed516ce14",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "META",
+      "file": "META_daily.csv",
+      "bytes": 261505,
+      "sha256": "6717fe2d9480d87c74e8e8865518ce8d9ff79cd1f41ed60e9609e508f28c9194",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "MRK",
+      "file": "MRK_daily.csv",
+      "bytes": 257001,
+      "sha256": "6a01ab87c1dd31520f9b1d50be1d9a9027d448d5059a4bd94d94703082baeabf",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "MS",
+      "file": "MS_daily.csv",
+      "bytes": 257762,
+      "sha256": "ced5c35a08af5ccdae30720e4d1fefba79f97bbb70a85bce219fe312dbf8c5c4",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "MSFT",
+      "file": "MSFT_daily.csv",
+      "bytes": 260617,
+      "sha256": "cbd0fa03aca6f2c1a91ef239b93aa60a4ef3c022fafe952d8e8d59f1d118d62e",
+      "rows": 2767,
+      "columns": [
+        "Price",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "NFLX",
+      "file": "NFLX_daily.csv",
+      "bytes": 257633,
+      "sha256": "688d7b0d510107494df9d8ff6f0f536b37f14e3417e0178d19338785496daf02",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "NKE",
+      "file": "NKE_daily.csv",
+      "bytes": 257039,
+      "sha256": "82a67ce4f701eee083ef20512279f7792b119fc363f188c9ef9594f71dd73565",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "NVDA",
+      "file": "NVDA_daily.csv",
+      "bytes": 265486,
+      "sha256": "2b7613fb039ccf376dc5b11df5ef696d68beca375151a75ed6f4bcc99e7be842",
+      "rows": 2767,
+      "columns": [
+        "Price",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "ORCL",
+      "file": "ORCL_daily.csv",
+      "bytes": 258756,
+      "sha256": "34cc4a5863970a724f3781ca503144ba4f4be2b934cb624f7fbfac46717300f5",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "PEP",
+      "file": "PEP_daily.csv",
+      "bytes": 258305,
+      "sha256": "1695c099fb1c094d6d101aeb73adcc960b9e3f45284d7a5d47b8c744112c618e",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "PFE",
+      "file": "PFE_daily.csv",
+      "bytes": 263223,
+      "sha256": "372ecad16ae457d50cf74044d6e251aab90b2e9e592e5b1a07524feeafa89b58",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "PG",
+      "file": "PG_daily.csv",
+      "bytes": 259150,
+      "sha256": "5e79a063504f14326de741b2508143ef059b2ac8d84fdc005b97e1f4b80afd0e",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "QCOM",
+      "file": "QCOM_daily.csv",
+      "bytes": 259918,
+      "sha256": "dfa4450c689232536e48205ba7ec3e5f4ce513cad164f38ec6946b4b11103837",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "T",
+      "file": "T_daily.csv",
+      "bytes": 265680,
+      "sha256": "1854d76d9c9cb651d0bc8e45df6c21ce5e3969696da4d83d514891b90547e9a9",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "TMO",
+      "file": "TMO_daily.csv",
+      "bytes": 257141,
+      "sha256": "97912a89399121900aa7cecf6b0e613a09be19694bdae85b3341eb00a2ca04ba",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "TSLA",
+      "file": "TSLA_daily.csv",
+      "bytes": 258152,
+      "sha256": "f63e1b753a30b0b51c690f803cbb7f4cd62fc50dfc7af2b631e01edfd7e9c505",
+      "rows": 2767,
+      "columns": [
+        "Price",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "TXN",
+      "file": "TXN_daily.csv",
+      "bytes": 258614,
+      "sha256": "5fa7a906dca96a3d907ed6fc3fc182a3e5cb746087c5b97218deabdf82278c94",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "UNH",
+      "file": "UNH_daily.csv",
+      "bytes": 258572,
+      "sha256": "4d18d40ea1ff598b045807bca62d22937132673577b2851a3ca0cb1f7075fdbf",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "V",
+      "file": "V_daily.csv",
+      "bytes": 259376,
+      "sha256": "db358fd9389fad0f64b55ab35090ee59ca3cd432669366284c41d6df921003d5",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "VZ",
+      "file": "VZ_daily.csv",
+      "bytes": 260979,
+      "sha256": "a340a1c1557ec7261200420e80dfb892892e1d12ce174462f73beb3031e917b5",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "WFC",
+      "file": "WFC_daily.csv",
+      "bytes": 259411,
+      "sha256": "547a27f26da8b28f4903b5ed4cb68f3110ad643e4332a8832655ce1fb8b09916",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "WMT",
+      "file": "WMT_daily.csv",
+      "bytes": 260929,
+      "sha256": "0e8c14bf081b2b5a7a613300aceeebfd88c912c9286b54424f4ca96d3da5b37a",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    },
+    {
+      "ticker": "XOM",
+      "file": "XOM_daily.csv",
+      "bytes": 259661,
+      "sha256": "fb327c2153112454df657908acf5744531a942cf36f550b39bf3dffddc0163c0",
+      "rows": 2765,
+      "columns": [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume"
+      ],
+      "first_date": "2015-01-02",
+      "last_date": "2025-12-30",
+      "splits": {
+        "default": {
+          "train": {
+            "rows": 2138,
+            "first": "2015-01-02",
+            "last": "2023-06-30"
+          },
+          "val": {
+            "rows": 126,
+            "first": "2023-07-03",
+            "last": "2023-12-29"
+          },
+          "test": {
+            "rows": 252,
+            "first": "2024-01-02",
+            "last": "2024-12-31"
+          }
+        },
+        "bear2022": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 252,
+            "first": "2021-01-04",
+            "last": "2021-12-31"
+          },
+          "test": {
+            "rows": 251,
+            "first": "2022-01-03",
+            "last": "2022-12-30"
+          }
+        },
+        "cycle": {
+          "train": {
+            "rows": 1258,
+            "first": "2015-01-02",
+            "last": "2019-12-31"
+          },
+          "val": {
+            "rows": 377,
+            "first": "2020-01-02",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        },
+        "cycle_b": {
+          "train": {
+            "rows": 1511,
+            "first": "2015-01-02",
+            "last": "2020-12-31"
+          },
+          "val": {
+            "rows": 124,
+            "first": "2021-01-04",
+            "last": "2021-06-30"
+          },
+          "test": {
+            "rows": 881,
+            "first": "2021-07-01",
+            "last": "2024-12-31"
+          }
+        }
+      }
+    }
+  ]
+}

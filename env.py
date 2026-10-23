@@ -36,10 +36,14 @@ class FlyTradeEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "per_feature", reward_mode: str = "shaped", dd_penalty: float = 0.0, use_xsection: bool = False):
+    def __init__(self, data_path: Path, window_size: int = 30, initial_cash: float = 1e5, transaction_cost: float = 0.001, stop_loss: float = 0.05, take_profit: float = 0.15, enable_sl_tp: bool = False, start_date=None, end_date=None, indicator_norm: str = "per_feature", reward_mode: str = "shaped", dd_penalty: float = 0.0, use_xsection: bool = False, indicator_stats=None):
         super().__init__()
         self.window_size = window_size
         self.initial_cash = initial_cash
+        # Optional (mean, std) fitted on the TRAIN slice. When provided, the
+        # validation/test/live envs reuse the training scaler instead of
+        # recomputing statistics on their own future data.
+        self._indicator_stats = indicator_stats
         self.data = _load_ohlcv(data_path)
         required = ["Open", "High", "Low", "Close", "Volume"]
         assert all(col in self.data.columns for col in required), "Missing OHLCV columns"
@@ -243,10 +247,28 @@ class FlyTradeEnv(gym.Env):
 
         self.indicators = np.stack([rsi, macd_hist, bb_width, atr, trend_strength, vol_regime, sma_ratio, ema_trend], axis=1).astype(np.float32)
         # Per-indicator statistics for the 'per_feature' normalisation mode.
-        # NOTE: computed over the whole (sliced) series. For strict walk-forward
-        # correctness these should come from the training slice only.
-        self.ind_mean = self.indicators.mean(axis=0).astype(np.float64)
-        self.ind_std = self.indicators.std(axis=0).astype(np.float64)
+        # New training/evaluation code passes a scaler fitted on the *train*
+        # slice. The fallback preserves the historical behaviour for old scripts
+        # and old checkpoints, but it is not walk-forward safe: it normalises a
+        # val/test window using that window's own mean and standard deviation.
+        if self._indicator_stats is not None:
+            mean, std = self._indicator_stats
+            mean = np.asarray(mean, dtype=np.float64).reshape(-1)
+            std = np.asarray(std, dtype=np.float64).reshape(-1)
+            if mean.shape != (8,) or std.shape != (8,):
+                raise ValueError("indicator_stats must be a (mean[8], std[8]) pair")
+            if not np.isfinite(mean).all() or not np.isfinite(std).all():
+                raise ValueError("indicator_stats contains non-finite values")
+            self.ind_mean = mean
+            self.ind_std = np.maximum(std, 1e-9)
+        else:
+            self.ind_mean = self.indicators.mean(axis=0).astype(np.float64)
+            self.ind_std = self.indicators.std(axis=0).astype(np.float64)
+
+    @property
+    def indicator_stats(self):
+        """Return ``(mean, std)`` for reuse by validation/test/live envs."""
+        return self.ind_mean.copy(), self.ind_std.copy()
 
     def _market_observation(self, idx: int) -> np.ndarray:
         """[OHLCV window, indicator window, cross-sectional block] for bar ``idx``.
@@ -367,7 +389,9 @@ class FlyTradeEnv(gym.Env):
         # Execute action at the close price of the current step
         idx = min(self.current_step + self.window_size - 1, len(self.data) - 1)
         price = float(self.data.iloc[idx]["Close"])
-        
+        traded = False
+        prev_trade_step = self.last_trade_step
+
         if self.cash > 0 and action >= 1 and action <= 3:
             # size_override lets the caller trade an arbitrary fraction of cash
             # instead of the discretised 25/50/100% bucket.
@@ -381,6 +405,7 @@ class FlyTradeEnv(gym.Env):
             if amount > 0:
                 self.shares += amount / price
                 self.cash -= amount * (1 + self.transaction_cost)
+                traded = True
         elif self.shares > 0 and action >= 4:
             fraction = (size_override if size_override is not None
                         else self.SELL_FRACTIONS[action])
@@ -390,6 +415,7 @@ class FlyTradeEnv(gym.Env):
                 sell_value = amount * price
                 self.cash += sell_value * (1 - self.transaction_cost)
                 self.shares -= amount
+                traded = True
             # Reset tracking if fully sold
             if self.shares <= 1e-9:
                 self.entry_price = 0.0
@@ -420,10 +446,16 @@ class FlyTradeEnv(gym.Env):
             self.cash -= sell_value * self.transaction_cost
             self.entry_price = 0.0
             self.highest_price = 0.0
+            traded = True
 
         # Advance
         self.current_step += 1
         done = self.current_step >= self.n_steps
+        # The observation carries steps-since-trade, so update it before the
+        # next observation is built. The shaped anti-churn penalty below uses
+        # ``prev_trade_step`` so it still measures the gap before this trade.
+        if traded:
+            self.last_trade_step = self.current_step
         next_obs = self._get_observation(self.current_step) if not done else np.zeros_like(self.observation_space.low)
 
         # Compute portfolio value
@@ -506,10 +538,9 @@ class FlyTradeEnv(gym.Env):
 
             # 4. Anti-churn overtrading penalty
             if action != 0:
-                steps_since_last_trade = self.current_step - self.last_trade_step
+                steps_since_last_trade = self.current_step - prev_trade_step
                 if steps_since_last_trade < 2:
                     reward -= 0.10
-                self.last_trade_step = self.current_step
 
             # 5. Cash inactivity penalty
             if self.shares <= 1e-6:
@@ -547,3 +578,22 @@ class FlyTradeEnv(gym.Env):
                 print(f"Step {self.current_step}: Portfolio = ${self.portfolio_history[-1]:.2f}")
         else:
             pass
+
+
+def fit_indicator_stats(data_path: Path, start_date=None, end_date=None,
+                        window_size: int = 30):
+    """Fit the per-feature indicator scaler on one date range.
+
+    Use this on the **train** split only, then pass the returned pair as
+    ``indicator_stats=`` to every other ``FlyTradeEnv`` for the same ticker.
+    The probe environment never trades; it exists only to reach the indicator
+    computation.
+    """
+    probe = FlyTradeEnv(
+        data_path,
+        window_size=window_size,
+        start_date=start_date,
+        end_date=end_date,
+        reward_mode="excess",
+    )
+    return probe.indicator_stats
